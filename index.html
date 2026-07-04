@@ -1,0 +1,418 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Acacia Books — Inventory</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script type="module">
+  import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+  window.supabase = createClient(
+    'https://swgyefbzplelxrjcovef.supabase.co',
+    'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN3Z3llZmJ6cGxlbHhyamNvdmVmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODE1MDU4MzIsImV4cCI6MjA5NzA4MTgzMn0.U2zDNqRfdEgTgldBd7CcEhfsmGXvYZ14yh-4yYC2HlY'
+  );
+  window.dispatchEvent(new Event('supabase-ready'));
+</script>
+<style>
+   body{font-family:'cambria',system-ui,sans-serif;background:#f4f6fa}
+  .nav-btn{display:flex;align-items:center;gap:.5rem;width:100%;text-align:left;padding:.55rem .75rem;border-radius:.5rem;font-size:.875rem;color:#334155}
+  .nav-btn:hover{background:#f1f5f9}
+  .nav-btn.active{background:#0ea5e9;color:white}
+  .badge{display:inline-block;padding:.15rem .5rem;border-radius:9999px;font-size:.7rem;font-weight:600}
+  table{width:100%;border-collapse:collapse}
+  th{text-align:left;font-size:.7rem;text-transform:uppercase;color:#64748b;padding:.6rem .5rem;border-bottom:1px solid #e2e8f0;background:#f8fafc}
+  td{padding:.55rem .5rem;border-bottom:1px solid #f1f5f9;font-size:.875rem;color:#1e293b}
+  tr:hover td{background:#f8fafc}
+  .btn{display:inline-flex;align-items:center;gap:.35rem;padding:.45rem .8rem;border-radius:.5rem;font-size:.8rem;font-weight:600;cursor:pointer;border:1px solid transparent}
+  .btn-primary{background:#0ea5e9;color:white}
+  .btn-primary:hover{background:#0284c7}
+  .btn-secondary{background:white;color:#334155;border-color:#e2e8f0}
+  .btn-secondary:hover{background:#f8fafc}
+  .btn-danger{background:#fee2e2;color:#b91c1c}
+  .btn-danger:hover{background:#fecaca}
+  input,select,textarea{width:100%;padding:.45rem .6rem;border:1px solid #e2e8f0;border-radius:.4rem;font-size:.875rem;background:white}
+  input:focus,select:focus,textarea:focus{outline:none;border-color:#0ea5e9;box-shadow:0 0 0 3px rgba(14,165,233,.15)}
+  label{font-size:.75rem;font-weight:600;color:#475569;display:block;margin-bottom:.25rem}
+  .card{background:white;border:1px solid #e2e8f0;border-radius:.75rem}
+  .modal-backdrop{position:fixed;inset:0;background:rgba(15,23,42,.5);display:flex;align-items:center;justify-content:center;z-index:50;padding:1rem}
+  .stat-card{background:white;border:1px solid #e2e8f0;border-radius:.75rem;padding:1rem}
+</style>
+</head>
+<body>
+
+<!-- LOGIN -->
+<div id="loginView" class="hidden min-h-screen flex items-center justify-center p-4">
+  <div class="w-full max-w-sm card p-6">
+    <div class="text-center mb-6">
+      <div class="w-12 h-12 mx-auto rounded-lg bg-sky-500 flex items-center justify-center text-white font-bold text-xl mb-3">A</div>
+      <h1 class="text-lg font-bold text-slate-800">Acacia Books Inventory</h1>
+      <p class="text-xs text-slate-500 mt-1">Sign in to your workspace</p>
+    </div>
+    <form id="loginForm" class="space-y-3">
+      <div><label>Email</label><input type="email" id="loginEmail" required autocomplete="email"></div>
+      <div><label>Password</label><input type="password" id="loginPassword" required autocomplete="current-password"></div>
+      <div id="loginError" class="hidden text-xs text-red-600 bg-red-50 p-2 rounded"></div>
+      <button type="submit" class="btn btn-primary w-full justify-center">Sign In</button>
+      <button type="button" id="signupBtn" class="btn btn-secondary w-full justify-center">Create account</button>
+    </form>
+  </div>
+</div>
+
+<!-- APP -->
+<div id="appView" class="hidden min-h-screen flex">
+  <aside class="w-60 bg-white border-r border-slate-200 flex flex-col">
+    <div class="p-4 border-b border-slate-200 flex items-center gap-2">
+      <div class="w-8 h-8 rounded bg-sky-500 flex items-center justify-center text-white font-bold">A</div>
+      <div>
+        <div class="text-sm font-bold text-slate-800">Acacia Inventory</div>
+        <div class="text-[10px] text-slate-500" id="userEmail"></div>
+        <div class="text-[10px] text-sky-600 font-semibold" id="companyLabel"></div>
+      </div>
+    </div>
+    <nav class="flex-1 p-2 space-y-1" id="sideNav"></nav>
+    <div class="p-2 border-t border-slate-200">
+      <button id="logoutBtn" class="nav-btn text-red-600 hover:bg-red-50">Sign out</button>
+    </div>
+  </aside>
+  <main class="flex-1 overflow-auto">
+    <header class="bg-white border-b border-slate-200 px-6 py-3 flex items-center justify-between sticky top-0 z-10">
+      <h2 id="pageTitle" class="text-lg font-semibold text-slate-800">Dashboard</h2>
+      <div id="pageActions"></div>
+    </header>
+    <div id="pageContent" class="p-6"></div>
+  </main>
+</div>
+
+<div id="modalRoot"></div>
+
+<script>
+// ============ STATE ============
+const MODULES = [
+  {id:'dashboard', label:'Dashboard', icon:'📊'},
+  {id:'items', label:'Items', icon:'📦'},
+  {id:'categories', label:'Categories', icon:'🏷️'},
+  {id:'warehouses', label:'Warehouses', icon:'🏬'},
+  {id:'movements', label:'Stock Movements', icon:'🔄'},
+  {id:'adjustments', label:'Stock Adjustments', icon:'⚖️'},
+  {id:'bundles', label:'Bundles', icon:'🎁'},
+  {id:'pricelists', label:'Price Lists', icon:'💰'},
+  {id:'reorder', label:'Reorder Report', icon:'🚨'},
+];
+
+let state = {
+  items:[], categories:[], warehouses:[], movements:[],
+  adjustments:[], bundles:[], pricelists:[]
+};
+let currentUser = null;
+let currentCompany = null;   // {id, name}
+let currentModule = 'dashboard';
+const uid = () => Math.random().toString(36).slice(2,10);
+const sb = () => window.supabase;
+
+// ============ PERSISTENCE (per-company via Supabase) ============
+async function loadState(){
+  const {data, error} = await sb().from('inventory_state').select('data').eq('company_id', currentCompany.id).maybeSingle();
+  if(error){ console.warn('loadState', error); return; }
+  if(data?.data){ state = {items:[],categories:[],warehouses:[],movements:[],adjustments:[],bundles:[],pricelists:[], ...data.data}; }
+  else { state = {items:[],categories:[],warehouses:[],movements:[],adjustments:[],bundles:[],pricelists:[]}; }
+}
+let saveTimer=null;
+async function saveState(){
+  render();
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(async ()=>{
+    const {error} = await sb().from('inventory_state').upsert(
+      {company_id: currentCompany.id, data: state, updated_by: currentUser.id},
+      {onConflict:'company_id'}
+    );
+    if(error) alert('Save failed: '+error.message);
+  }, 400);
+}
+
+// ============ AUTH (Supabase) ============
+function showLogin(){ document.getElementById('loginView').classList.remove('hidden'); document.getElementById('appView').classList.add('hidden'); }
+function showApp(){ document.getElementById('loginView').classList.add('hidden'); document.getElementById('appView').classList.remove('hidden'); }
+function showErr(msg, ok=false){
+  const err=document.getElementById('loginError');
+  err.textContent=msg; err.classList.remove('hidden');
+  err.className = ok ? 'text-xs text-emerald-700 bg-emerald-50 p-2 rounded' : 'text-xs text-red-600 bg-red-50 p-2 rounded';
+}
+
+window.addEventListener('supabase-ready', async () => {
+  const {data:{session}} = await sb().auth.getSession();
+  if(session){ await onSignedIn(session.user); } else { showLogin(); }
+});
+
+document.getElementById('loginForm').addEventListener('submit', async e=>{
+  e.preventDefault();
+  const email=document.getElementById('loginEmail').value.trim().toLowerCase();
+  const password=document.getElementById('loginPassword').value;
+  const {data,error} = await sb().auth.signInWithPassword({email,password});
+  if(error){ showErr(error.message); return; }
+  await onSignedIn(data.user);
+});
+document.getElementById('signupBtn').addEventListener('click', async()=>{
+  const email=document.getElementById('loginEmail').value.trim().toLowerCase();
+  const password=document.getElementById('loginPassword').value;
+  if(!email||!password){ showErr('Enter email and password.'); return; }
+  const {data,error} = await sb().auth.signUp({email,password});
+  if(error){ showErr(error.message); return; }
+  if(data.session){ await onSignedIn(data.user); }
+  else showErr('Check your email to confirm the account, then sign in.', true);
+});
+document.getElementById('logoutBtn').addEventListener('click', async ()=>{
+  await sb().auth.signOut(); location.reload();
+});
+
+async function onSignedIn(user){
+  currentUser = user;
+  document.getElementById('userEmail').textContent = user.email;
+  // pick or create company
+  const {data: memberships, error} = await sb()
+    .from('company_members')
+    .select('company_id, companies(id,name)')
+    .eq('user_id', user.id);
+  if(error){ alert('Cannot load companies: '+error.message+'\n\nRun the SQL setup in Supabase.'); showLogin(); return; }
+  let company;
+  if(!memberships || memberships.length===0){
+    const name = prompt('No company yet. Enter a company name to create one:');
+    if(!name){ showLogin(); return; }
+    const {data:c, error:e1} = await sb().from('companies').insert({name, owner_id:user.id}).select().single();
+    if(e1){ alert('Create failed: '+e1.message); showLogin(); return; }
+    await sb().from('company_members').insert({company_id:c.id, user_id:user.id, role:'owner'});
+    company = c;
+  } else if(memberships.length===1){
+    company = memberships[0].companies;
+  } else {
+    const opts = memberships.map((m,i)=>`${i+1}. ${m.companies.name}`).join('\n');
+    const pick = prompt('Choose company:\n'+opts+'\n\nEnter number:');
+    const idx = Math.max(1, Math.min(memberships.length, parseInt(pick||'1')))-1;
+    company = memberships[idx].companies;
+  }
+  currentCompany = company;
+  document.getElementById('companyLabel').textContent = company.name;
+  showApp();
+  buildNav();
+  await loadState();
+  render();
+}
+
+
+
+// ============ NAV / RENDER ============
+function buildNav(){
+  const nav = document.getElementById('sideNav');
+  nav.innerHTML = MODULES.map(m=>`<button class="nav-btn ${m.id===currentModule?'active':''}" data-mod="${m.id}"><span>${m.icon}</span><span>${m.label}</span></button>`).join('');
+  nav.querySelectorAll('button').forEach(b=>b.addEventListener('click', ()=>{ currentModule=b.dataset.mod; buildNav(); render(); }));
+}
+
+function render(){
+  const title = MODULES.find(m=>m.id===currentModule).label;
+  document.getElementById('pageTitle').textContent = title;
+  document.getElementById('pageActions').innerHTML = '';
+  const el = document.getElementById('pageContent');
+  el.innerHTML = '';
+  ({dashboard:renderDashboard, items:renderItems, categories:renderCategories, warehouses:renderWarehouses,
+    movements:renderMovements, adjustments:renderAdjustments, bundles:renderBundles, pricelists:renderPricelists,
+    reorder:renderReorder})[currentModule](el);
+}
+
+// ============ HELPERS ============
+function tableView(el, cols, rows, opts={}){
+  const wrap = document.createElement('div'); wrap.className='card overflow-hidden';
+  if(!rows.length){ wrap.innerHTML=`<div class="p-8 text-center text-sm text-slate-500">${opts.empty||'No records yet.'}</div>`; el.appendChild(wrap); return; }
+  const t = document.createElement('table');
+  t.innerHTML = `<thead><tr>${cols.map(c=>`<th>${c.label}</th>`).join('')}<th class="w-10"></th></tr></thead>
+    <tbody>${rows.map(r=>`<tr>${cols.map(c=>`<td>${c.render?c.render(r):(r[c.key]??'')}</td>`).join('')}
+      <td class="text-right"><button class="text-red-600 text-xs hover:underline" data-del="${r.id}">Delete</button></td></tr>`).join('')}</tbody>`;
+  wrap.appendChild(t);
+  el.appendChild(wrap);
+  t.querySelectorAll('[data-del]').forEach(b=>b.addEventListener('click', ()=>opts.onDelete?.(b.dataset.del)));
+}
+function addBtn(label, onClick){
+  const b = document.createElement('button'); b.className='btn btn-primary'; b.textContent='+ '+label;
+  b.addEventListener('click', onClick);
+  document.getElementById('pageActions').appendChild(b);
+}
+function openModal(title, fieldsHtml, onSubmit){
+  const root = document.getElementById('modalRoot');
+  root.innerHTML = `<div class="modal-backdrop"><div class="card w-full max-w-lg">
+    <div class="p-4 border-b border-slate-200 flex items-center justify-between"><h3 class="font-semibold text-slate-800">${title}</h3><button id="mClose" class="text-slate-400 hover:text-slate-600">✕</button></div>
+    <form id="mForm" class="p-4 space-y-3">${fieldsHtml}
+      <div class="flex justify-end gap-2 pt-2"><button type="button" id="mCancel" class="btn btn-secondary">Cancel</button><button type="submit" class="btn btn-primary">Save</button></div>
+    </form></div></div>`;
+  const close=()=>root.innerHTML='';
+  root.querySelector('#mClose').onclick=close; root.querySelector('#mCancel').onclick=close;
+  root.querySelector('#mForm').addEventListener('submit', e=>{
+    e.preventDefault();
+    const fd = Object.fromEntries(new FormData(e.target));
+    onSubmit(fd); close();
+  });
+}
+
+// ============ MODULES ============
+function renderDashboard(el){
+  const totalItems = state.items.length;
+  const totalStock = state.items.reduce((s,i)=>s+Number(i.stock||0),0);
+  const totalValue = state.items.reduce((s,i)=>s+Number(i.stock||0)*Number(i.cost||0),0);
+  const low = state.items.filter(i=>Number(i.stock||0)<=Number(i.reorder||0)).length;
+  el.innerHTML = `<div class="grid grid-cols-4 gap-4 mb-6">
+    <div class="stat-card"><div class="text-xs text-slate-500">Total Items</div><div class="text-2xl font-bold text-slate-800 mt-1">${totalItems}</div></div>
+    <div class="stat-card"><div class="text-xs text-slate-500">Units in Stock</div><div class="text-2xl font-bold text-slate-800 mt-1">${totalStock}</div></div>
+    <div class="stat-card"><div class="text-xs text-slate-500">Inventory Value</div><div class="text-2xl font-bold text-slate-800 mt-1">${totalValue.toLocaleString(undefined,{style:'currency',currency:'USD'})}</div></div>
+    <div class="stat-card"><div class="text-xs text-slate-500">Low Stock Alerts</div><div class="text-2xl font-bold text-red-600 mt-1">${low}</div></div>
+  </div>
+  <div class="card p-4"><h3 class="font-semibold text-slate-800 mb-3">Recent Movements</h3>
+    ${state.movements.slice(-8).reverse().map(m=>`<div class="flex justify-between text-sm py-1.5 border-b border-slate-100"><span>${m.date} · ${m.type} · <b>${(state.items.find(i=>i.id===m.itemId)||{}).name||'—'}</b></span><span class="font-semibold ${m.type==='In'?'text-emerald-600':'text-red-600'}">${m.type==='In'?'+':'-'}${m.qty}</span></div>`).join('')||'<div class="text-sm text-slate-500">No movements yet.</div>'}
+  </div>`;
+}
+
+function renderItems(el){
+  addBtn('New Item', ()=>{
+    const catOpts = state.categories.map(c=>`<option value="${c.id}">${c.name}</option>`).join('');
+    const whOpts = state.warehouses.map(w=>`<option value="${w.id}">${w.name}</option>`).join('');
+    openModal('New Item', `
+      <div class="grid grid-cols-2 gap-3">
+        <div><label>SKU</label><input name="sku" required></div>
+        <div><label>Name</label><input name="name" required></div>
+        <div><label>Category</label><select name="categoryId"><option value="">—</option>${catOpts}</select></div>
+        <div><label>Warehouse</label><select name="warehouseId"><option value="">—</option>${whOpts}</select></div>
+        <div><label>Cost</label><input name="cost" type="number" step="0.01" value="0"></div>
+        <div><label>Price</label><input name="price" type="number" step="0.01" value="0"></div>
+        <div><label>Opening Stock</label><input name="stock" type="number" value="0"></div>
+        <div><label>Reorder Level</label><input name="reorder" type="number" value="0"></div>
+        <div class="col-span-2"><label>Barcode / ISBN</label><input name="barcode"></div>
+      </div>`, d=>{ state.items.push({id:uid(), ...d}); saveState(); });
+  });
+  tableView(el, [
+    {key:'sku', label:'SKU'},
+    {key:'name', label:'Name'},
+    {label:'Category', render:r=>(state.categories.find(c=>c.id===r.categoryId)||{}).name||'—'},
+    {label:'Warehouse', render:r=>(state.warehouses.find(w=>w.id===r.warehouseId)||{}).name||'—'},
+    {label:'Stock', render:r=>{const n=Number(r.stock||0),rl=Number(r.reorder||0);return `<span class="${n<=rl?'text-red-600 font-semibold':''}">${n}</span>`}},
+    {key:'price', label:'Price'},
+    {key:'barcode', label:'Barcode'},
+  ], state.items, {empty:'No items. Add your first product.', onDelete:id=>{ state.items=state.items.filter(i=>i.id!==id); saveState(); }});
+}
+
+function renderCategories(el){
+  addBtn('New Category', ()=>openModal('New Category', `<div><label>Name</label><input name="name" required></div><div><label>Description</label><input name="description"></div>`, d=>{ state.categories.push({id:uid(),...d}); saveState(); }));
+  tableView(el, [{key:'name',label:'Name'},{key:'description',label:'Description'}], state.categories, {empty:'No categories yet.', onDelete:id=>{ state.categories=state.categories.filter(x=>x.id!==id); saveState(); }});
+}
+
+function renderWarehouses(el){
+  addBtn('New Warehouse', ()=>openModal('New Warehouse', `<div><label>Name</label><input name="name" required></div><div><label>Location</label><input name="location"></div><div><label>Manager</label><input name="manager"></div>`, d=>{ state.warehouses.push({id:uid(),...d}); saveState(); }));
+  tableView(el, [{key:'name',label:'Name'},{key:'location',label:'Location'},{key:'manager',label:'Manager'}], state.warehouses, {empty:'No warehouses yet.', onDelete:id=>{ state.warehouses=state.warehouses.filter(x=>x.id!==id); saveState(); }});
+}
+
+function renderMovements(el){
+  addBtn('Record Movement', ()=>{
+    const itemOpts = state.items.map(i=>`<option value="${i.id}">${i.sku} — ${i.name}</option>`).join('');
+    openModal('Stock Movement', `
+      <div class="grid grid-cols-2 gap-3">
+        <div><label>Date</label><input name="date" type="date" value="${new Date().toISOString().slice(0,10)}" required></div>
+        <div><label>Type</label><select name="type"><option>In</option><option>Out</option></select></div>
+        <div class="col-span-2"><label>Item</label><select name="itemId" required>${itemOpts}</select></div>
+        <div><label>Quantity</label><input name="qty" type="number" min="1" required></div>
+        <div><label>Reference</label><input name="ref" placeholder="PO/SO/GRN #"></div>
+        <div class="col-span-2"><label>Note</label><input name="note"></div>
+      </div>`, d=>{
+        d.qty = Number(d.qty);
+        state.movements.push({id:uid(),...d});
+        const item = state.items.find(i=>i.id===d.itemId);
+        if(item){ item.stock = Number(item.stock||0) + (d.type==='In'?d.qty:-d.qty); }
+        saveState();
+      });
+  });
+  tableView(el, [
+    {key:'date',label:'Date'},
+    {key:'type',label:'Type', render:r=>`<span class="badge ${r.type==='In'?'bg-emerald-100 text-emerald-700':'bg-red-100 text-red-700'}">${r.type}</span>`},
+    {label:'Item', render:r=>(state.items.find(i=>i.id===r.itemId)||{}).name||'—'},
+    {key:'qty',label:'Qty'},
+    {key:'ref',label:'Ref'},
+    {key:'note',label:'Note'},
+  ], [...state.movements].reverse(), {empty:'No movements recorded.', onDelete:id=>{
+    const m=state.movements.find(x=>x.id===id); if(m){ const it=state.items.find(i=>i.id===m.itemId); if(it) it.stock=Number(it.stock||0)-(m.type==='In'?m.qty:-m.qty);}
+    state.movements=state.movements.filter(x=>x.id!==id); saveState();
+  }});
+}
+
+function renderAdjustments(el){
+  addBtn('New Adjustment', ()=>{
+    const itemOpts = state.items.map(i=>`<option value="${i.id}">${i.sku} — ${i.name} (${i.stock||0})</option>`).join('');
+    openModal('Stock Adjustment', `
+      <div class="grid grid-cols-2 gap-3">
+        <div><label>Date</label><input name="date" type="date" value="${new Date().toISOString().slice(0,10)}" required></div>
+        <div><label>Reason</label><select name="reason"><option>Damage</option><option>Loss</option><option>Count Correction</option><option>Expiry</option></select></div>
+        <div class="col-span-2"><label>Item</label><select name="itemId" required>${itemOpts}</select></div>
+        <div><label>New Quantity</label><input name="newQty" type="number" required></div>
+        <div><label>Note</label><input name="note"></div>
+      </div>`, d=>{
+        const item = state.items.find(i=>i.id===d.itemId);
+        const oldQty = Number(item?.stock||0);
+        const newQty = Number(d.newQty);
+        state.adjustments.push({id:uid(),...d, oldQty, newQty, delta:newQty-oldQty});
+        if(item) item.stock = newQty;
+        saveState();
+      });
+  });
+  tableView(el, [
+    {key:'date',label:'Date'},
+    {label:'Item', render:r=>(state.items.find(i=>i.id===r.itemId)||{}).name||'—'},
+    {key:'reason',label:'Reason'},
+    {key:'oldQty',label:'Old Qty'},
+    {key:'newQty',label:'New Qty'},
+    {label:'Delta', render:r=>`<span class="${r.delta>=0?'text-emerald-600':'text-red-600'} font-semibold">${r.delta>=0?'+':''}${r.delta}</span>`},
+    {key:'note',label:'Note'},
+  ], [...state.adjustments].reverse(), {empty:'No adjustments recorded.', onDelete:id=>{ state.adjustments=state.adjustments.filter(x=>x.id!==id); saveState(); }});
+}
+
+function renderBundles(el){
+  addBtn('New Bundle', ()=>{
+    const itemOpts = state.items.map(i=>`<option value="${i.id}">${i.sku} — ${i.name}</option>`).join('');
+    openModal('Bundle / Kit', `
+      <div><label>Bundle Name</label><input name="name" required></div>
+      <div><label>Price</label><input name="price" type="number" step="0.01" value="0"></div>
+      <div><label>Component Item</label><select name="itemId">${itemOpts}</select></div>
+      <div><label>Component Qty</label><input name="qty" type="number" value="1"></div>
+      <p class="text-xs text-slate-500">Add one component now; edit later to add more.</p>
+    `, d=>{ state.bundles.push({id:uid(), name:d.name, price:d.price, components:[{itemId:d.itemId, qty:Number(d.qty)}]}); saveState(); });
+  });
+  tableView(el, [
+    {key:'name',label:'Name'},
+    {label:'Components', render:r=>r.components.map(c=>`${(state.items.find(i=>i.id===c.itemId)||{}).name||'?'} ×${c.qty}`).join(', ')},
+    {key:'price',label:'Price'},
+  ], state.bundles, {empty:'No bundles yet.', onDelete:id=>{ state.bundles=state.bundles.filter(x=>x.id!==id); saveState(); }});
+}
+
+function renderPricelists(el){
+  addBtn('New Price List', ()=>{
+    const itemOpts = state.items.map(i=>`<option value="${i.id}">${i.sku} — ${i.name}</option>`).join('');
+    openModal('Price List Entry', `
+      <div><label>List Name</label><input name="list" placeholder="e.g. Wholesale, Retail" required></div>
+      <div><label>Item</label><select name="itemId" required>${itemOpts}</select></div>
+      <div><label>Price</label><input name="price" type="number" step="0.01" required></div>
+      <div><label>Currency</label><input name="currency" value="USD"></div>
+    `, d=>{ state.pricelists.push({id:uid(),...d}); saveState(); });
+  });
+  tableView(el, [
+    {key:'list',label:'List'},
+    {label:'Item', render:r=>(state.items.find(i=>i.id===r.itemId)||{}).name||'—'},
+    {key:'price',label:'Price'},
+    {key:'currency',label:'Currency'},
+  ], state.pricelists, {empty:'No price list entries yet.', onDelete:id=>{ state.pricelists=state.pricelists.filter(x=>x.id!==id); saveState(); }});
+}
+
+function renderReorder(el){
+  const low = state.items.filter(i=>Number(i.stock||0)<=Number(i.reorder||0));
+  tableView(el, [
+    {key:'sku',label:'SKU'},
+    {key:'name',label:'Name'},
+    {key:'stock',label:'On Hand'},
+    {key:'reorder',label:'Reorder Level'},
+    {label:'Suggested Order', render:r=>Math.max(0, (Number(r.reorder||0)*2)-Number(r.stock||0))},
+  ], low, {empty:'✅ All stock levels above reorder point.', onDelete:()=>{}});
+}
+</script>
+</body>
+</html>
