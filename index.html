@@ -5,10 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Acacia Inventory — Stock & Warehouse Hub</title>
 <meta name="description" content="Acacia Inventory Hub — stock control, movements, price lists, bundles, packages, shipments and adjustments (live-synced with Acacia ERP)." />
+<script>window.__SUPA_URL__='https://xglsampckermarjpczdf.supabase.co';window.__SUPA_KEY__='sb_publishable_x-dPR7pzhvJgag9soW0I8w_yfKTmi6A';</script>
 <script>
-  window.__SUPA_URL__ = 'https://skatovltmnsuiolduwfr.supabase.co';
-  window.__SUPA_KEY__ = 'sb_publishable_AS3lfXtQELv5CTl8HX6OPQ_8HtYBfQp';
-</script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
 <script src="https://cdn.tailwindcss.com"></script>
 <script>
@@ -62,7 +60,7 @@
       <label class="flex items-start gap-2 text-xs text-slate-500"><input type="checkbox" required class="mt-0.5"/>I agree to the Acacia Terms & Privacy Policy.</label>
       <button type="submit" class="w-full h-10 rounded-lg bg-acacia-600 hover:bg-acacia-700 text-white font-semibold">Create Account</button>
       <p id="suError" class="text-xs text-red-500 hidden"></p>
-      <p class="text-[11px] text-slate-500 text-center">Creating an account here also registers it in Acacia ERP for the given company.</p>
+      <p class="text-[11px] text-slate-500 text-center">Registers a login for an <b>existing</b> Acacia ERP company. To set up a brand-new company, do that in Acacia ERP first.</p>
     </form>
   </div>
 </div>
@@ -90,11 +88,11 @@
     <div class="flex items-center gap-2">
       <button onclick="openMail()" class="text-xs px-3 py-2 rounded-lg border border-slate-200 hover:bg-slate-50">✉️ Compose</button>
       <button onclick="pullAll()" class="text-xs px-3 py-2 rounded-lg border border-slate-200 hover:bg-slate-50">↻ Sync</button>
-      <a href="./app_1701-1_3.html" class="text-xs px-3 py-2 rounded-lg border border-slate-200 hover:bg-slate-50">← Back to Acacia</a>
+      <a href="./acacia-books.html" class="text-xs px-3 py-2 rounded-lg border border-slate-200 hover:bg-slate-50">← Back to Acacia</a>
       <div class="relative">
         <button onclick="toggleApps()" class="p-2 rounded-lg hover:bg-slate-100"><svg class="w-5 h-5 text-slate-600" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="5" r="1.5"/><circle cx="12" cy="5" r="1.5"/><circle cx="19" cy="5" r="1.5"/><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/><circle cx="5" cy="19" r="1.5"/><circle cx="12" cy="19" r="1.5"/><circle cx="19" cy="19" r="1.5"/></svg></button>
         <div id="appsMenu" class="hidden absolute right-0 mt-2 w-56 bg-white border border-slate-200 rounded-lg shadow-lg z-50 text-sm">
-          <a href="./app_1701-1_3.html" class="block px-3 py-2 hover:bg-slate-50">🏠 Acacia ERP (Main)</a>
+          <a href="./acacia-books.html" class="block px-3 py-2 hover:bg-slate-50">🏠 Acacia ERP (Main)</a>
           <a href="./acacia-mail_4.html" class="block px-3 py-2 hover:bg-slate-50">✉️ Acacia Mail</a>
           <a href="./acacia-inventory.html" class="block px-3 py-2 hover:bg-slate-50 font-semibold text-acacia-700">📦 Inventory</a>
           <a href="./acacia-payroll.html" class="block px-3 py-2 hover:bg-slate-50">💵 Payroll</a>
@@ -283,18 +281,30 @@ function toggleSupportPopup(){ document.getElementById('supportPopup')?.classLis
 
 const sb = window.supabase.createClient(window.__SUPA_URL__, window.__SUPA_KEY__);
 
-async function fetchUsers(){
+/* Acacia ERP publishes every login to the `app_accounts` table (login_id,
+   username, company_id, data, updated_at) whenever its user list changes —
+   see the companySync layer in acacia-books.html. Reading from that same
+   table (instead of a private "users" blob in a different project) is what
+   lets this app accept the exact sign-in you already use in Acacia ERP. */
+async function fetchAccount(loginId){
   try{
-    const { data } = await sb.from('app_state').select('value').eq('key','users').maybeSingle();
-    if(Array.isArray(data?.value)) return data.value;
-  }catch(e){ console.warn('users fetch failed',e); }
-  try{ return JSON.parse(localStorage.getItem('users')||'[]'); }catch{ return []; }
+    const id=String(loginId||'').trim().toLowerCase();
+    if(!id) return null;
+    const { data, error } = await sb.from('app_accounts').select('data,company_id').or(`login_id.eq.${id},username.eq.${id}`);
+    if(error || !data || !data.length) return null;
+    return data[0];
+  }catch(e){ console.warn('account fetch failed',e); return null; }
 }
-async function saveUsersCloud(users){
-  localStorage.setItem('users', JSON.stringify(users));
+async function pushAccount(rec, compId){
   try{
-    await sb.from('app_state').upsert({ key:'users', value:users, updated_at:new Date().toISOString() }, { onConflict:'key' });
-  }catch(e){ console.warn('users save failed',e); }
+    await sb.from('app_accounts').upsert({
+      login_id: String(rec.email||'').toLowerCase(),
+      username: String(rec.username||'').toLowerCase(),
+      company_id: compId,
+      data: rec,
+      updated_at: new Date().toISOString()
+    }, { onConflict:'login_id' });
+  }catch(e){ console.warn('account push failed',e); }
 }
 
 async function doSignIn(e){
@@ -304,16 +314,14 @@ async function doSignIn(e){
   const email=(siEmail.value||'').trim().toLowerCase();
   const pass=siPass.value;
   if(!company||!email){siError.textContent='Company name and email are required.';siError.classList.remove('hidden');return}
-  const users=await fetchUsers();
   const compId=toCompanyId(company);
-  const match=users.find(u=>{
-    const uEmail=(u.email||'').toLowerCase();
-    const uCompId=u.companyId||toCompanyId(u.companyName||'');
-    return uEmail===email && uCompId===compId;
-  });
-  if(!match){siError.textContent='No matching Acacia ERP account for that company + email.';siError.classList.remove('hidden');return}
+  const account=await fetchAccount(email);
+  if(!account || account.company_id!==compId){
+    siError.textContent='No matching Acacia ERP account for that company + email.';siError.classList.remove('hidden');return;
+  }
+  const match=account.data||{};
   if(match.password && match.password!==pass){siError.textContent='Incorrect password.';siError.classList.remove('hidden');return}
-  const session={ email:match.email, name:match.fullName||match.username||email, companyId:compId, companyName:match.companyName||company };
+  const session={ email:match.email||email, name:match.fullName||match.username||email, companyId:compId, companyName:match.companyName||company };
   localStorage.setItem(SESSION_KEY,JSON.stringify(session));
   boot();
 }
@@ -325,9 +333,9 @@ async function doSignUp(e){
   const email=(suEmail.value||'').trim().toLowerCase();
   const pass=suPass.value;
   if(!company||!email){suError.textContent='Company name and email are required.';suError.classList.remove('hidden');return}
-  const users=await fetchUsers();
   const compId=toCompanyId(company);
-  if(users.some(u=>(u.email||'').toLowerCase()===email)){
+  const existing=await fetchAccount(email);
+  if(existing){
     suError.textContent='Email already registered — use Sign In instead.';suError.classList.remove('hidden');return;
   }
   const rec={
@@ -337,9 +345,9 @@ async function doSignUp(e){
     role:'admin', companyId:compId, companyName:company,
     registered:new Date().toISOString(), status:'active', modules:[]
   };
-  users.push(rec);
-  await saveUsersCloud(users);
+  await pushAccount(rec, compId);
   localStorage.setItem(SESSION_KEY,JSON.stringify({ email:rec.email, name:rec.fullName, companyId:compId, companyName:company }));
+  suError.classList.add('hidden');
   boot();
 }
 
@@ -348,56 +356,109 @@ function toggleApps(){appsMenu.classList.toggle('hidden')}
 document.addEventListener('click',e=>{if(!e.target.closest('#appsMenu')&&!e.target.closest('button[onclick*=toggleApps]')) appsMenu?.classList.add('hidden')});
 
 function currentCompanyId(){ const u=currentUser(); return u?.companyId || 'default_company'; }
-function scopedKey(k){ return k + '_' + currentCompanyId(); }
 
+/* Acacia ERP's real per-company cloud sync (the "companySync" layer in
+   acacia-books.html) keeps one row per (company_id, key) in a table called
+   `company_state`, where `value` is the exact JSON text that used to live in
+   localStorage under that key. Reading/writing that same table, with the
+   same key names the main app actually uses, is what makes this Stock hub
+   identical to — and live-synced with — the one in Acacia ERP. Stock is
+   special: the main app keeps it as one row PER WAREHOUSE, under keys like
+   "inventory_Main Warehouse", not a single "inventory" row — so it's handled
+   separately below (see pullStock/pushStockFor) rather than through this
+   generic list.  */
 const MODULES = [
-  { id:'stock',       label:'Stock',            key:'inventory'        },
+  { id:'stock',       label:'Stock',            key:'inventory'        }, // special-cased, see pullStock()
   { id:'movement',    label:'Movement',         key:'movements'        },
   { id:'priceList',   label:'Price List',       key:'priceList'        },
   { id:'amendments',  label:'Amendments',       key:'amendments'       },
   { id:'bundleItems', label:'Bundle Items',     key:'bundles'          },
   { id:'bulkAdj',     label:'Bulk Adjustments', key:'bulkConsignments' },
-  { id:'packages',    label:'Packages',         key:'pushedBundles'    },
+  { id:'packages',    label:'Packages',         key:'orders'           }, // Packages tab derives its list from Sales "orders"
   { id:'shipments',   label:'Shipments',        key:'shipments'        },
 ];
 
-const store = {};                
+const store = {};      // module id -> array of rows
+const stockKeys = {};  // sku/index -> which "inventory_<warehouse>" row it came from (for edit/delete)
 let active = MODULES[0].id;
+let warehouseList = [];
 
 function setSync(status, tone){
   syncStatus.textContent = status;
   const dot = syncDot; dot.className = 'inline-block w-2 h-2 rounded-full ' +
     ({ok:'bg-emerald-500',busy:'bg-amber-400 animate-pulse',err:'bg-red-500',idle:'bg-slate-300'}[tone]||'bg-slate-300');
 }
+function parseVal(v){
+  if(v==null) return [];
+  if(Array.isArray(v)) return v;
+  if(typeof v==='object') return v;
+  try{ const p=JSON.parse(v); return p; }catch{ return []; }
+}
+
+async function pullStock(){
+  const c=currentCompanyId();
+  try{
+    const { data, error } = await sb.from('company_state').select('key,value').eq('company_id', c).like('key','inventory\\_%');
+    if(error) throw error;
+    const rows=[];
+    (data||[]).forEach(row=>{
+      const warehouse = row.key.replace(/^inventory_/, '');
+      const items = parseVal(row.value);
+      (Array.isArray(items)?items:[]).forEach((it,i)=>{
+        rows.push(Object.assign({}, it, { warehouse }));
+        stockKeys[rows.length-1] = { key: row.key, index: i };
+      });
+    });
+    store.stock = rows;
+  }catch(e){ console.warn('pullStock failed', e); store.stock = []; }
+}
+async function pushStockFor(warehouse, items){
+  const c=currentCompanyId();
+  const { error } = await sb.from('company_state').upsert(
+    { company_id: c, key: 'inventory_'+warehouse, value: JSON.stringify(items), updated_at: new Date().toISOString() },
+    { onConflict: 'company_id,key' }
+  );
+  if(error){ setSync('save error','err'); alert('Save failed: '+error.message); return false; }
+  return true;
+}
+async function pullWarehouses(){
+  const c=currentCompanyId();
+  try{
+    const { data } = await sb.from('company_state').select('value').eq('company_id', c).eq('key','warehouses').maybeSingle();
+    const list = parseVal(data?.value);
+    warehouseList = Array.isArray(list) ? list.map(w=>w.name||w).filter(Boolean) : [];
+  }catch(e){ warehouseList = []; }
+}
 
 async function pullOne(m){
+  if(m.id==='stock') return pullStock();
+  const c=currentCompanyId();
   try {
-    const scoped=scopedKey(m.key);
-    let { data, error } = await sb.from('app_state').select('value').eq('key', scoped).maybeSingle();
+    const { data, error } = await sb.from('company_state').select('value').eq('company_id', c).eq('key', m.key).maybeSingle();
     if(error) throw error;
-    if(!data){
-      const r = await sb.from('app_state').select('value').eq('key', m.key).maybeSingle();
-      data = r.data;
-    }
-    store[m.id] = Array.isArray(data?.value) ? data.value : [];
+    const val = parseVal(data?.value);
+    store[m.id] = Array.isArray(val) ? val : [];
   } catch(e) {
     console.warn(`Failed pulling key ${m.key}:`, e);
-    store[m.id] = []; 
+    store[m.id] = [];
   }
 }
 async function pullAll(){
   setSync('syncing…','busy');
   try{
+    await pullWarehouses();
     await Promise.all(MODULES.map(pullOne));
     setSync('synced · '+(currentUser()?.companyName||'workspace'),'ok');
     renderView();
   }catch(e){ console.warn(e); setSync('sync error','err'); }
 }
 async function pushOne(m){
+  if(m.id==='stock') return true; // stock pushes per-warehouse — see pushStockFor()
   setSync('saving…','busy');
-  const { error } = await sb.from('app_state').upsert(
-    { key: scopedKey(m.key), value: store[m.id]||[], updated_at: new Date().toISOString() },
-    { onConflict: 'key' }
+  const c=currentCompanyId();
+  const { error } = await sb.from('company_state').upsert(
+    { company_id: c, key: m.key, value: JSON.stringify(store[m.id]||[]), updated_at: new Date().toISOString() },
+    { onConflict: 'company_id,key' }
   );
   if(error){ setSync('save error','err'); alert('Save failed: '+error.message); return false }
   setSync('synced · '+(currentUser()?.companyName||'workspace'),'ok'); return true;
@@ -417,11 +478,15 @@ function cellText(v){
   if(typeof v==='object') return JSON.stringify(v);
   return String(v);
 }
+const REORDER_LEVEL = 10; // matches Acacia ERP's Low Stock report threshold
+
 function renderView(){
   const m = MODULES.find(x=>x.id===active);
+  if(m.id==='stock') return renderStockView();
+
   const rows = store[m.id] || [];
   const cols = collectColumns(rows);
-  
+
   let grandTotal = 0;
   try {
     rows.forEach(r => {
@@ -436,7 +501,7 @@ function renderView(){
   view.innerHTML = `
     <div class="mb-6 flex items-center justify-between">
       <div>
-        <h2 class="text-3xl font-bold tracking-tight text-slate-900">Welcome, ${escapeHtml(currentUser()?.companyName || 'Speartech Holdings Limited')}</h2>
+        <h2 class="text-3xl font-bold tracking-tight text-slate-900">Welcome, ${escapeHtml(currentUser()?.companyName || 'your workspace')}</h2>
         <p class="text-sm text-slate-500">Workspace: ${escapeHtml(currentUser()?.companyName || 'Acacia ERP')}</p>
       </div>
       <div class="flex gap-2">
@@ -456,23 +521,23 @@ function renderView(){
         <span class="text-2xl font-bold text-acacia-700 mt-2">KES ${grandTotal.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span>
       </div>
       <div class="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex flex-col justify-between">
-        <span class="text-sm font-semibold text-slate-500 uppercase tracking-wider">Sync Mapping</span>
-        <span class="text-sm font-mono text-slate-600 mt-2 bg-slate-50 p-1.5 rounded border border-slate-100 truncate">app_state.${m.key}</span>
+        <span class="text-sm font-semibold text-slate-500 uppercase tracking-wider">Synced with Acacia ERP</span>
+        <span class="text-sm font-mono text-slate-600 mt-2 bg-slate-50 p-1.5 rounded border border-slate-100 truncate">company_state.${m.key}</span>
       </div>
     </div>
 
-    <!-- Data Table Hub Matrix Layout -->
+    <!-- Data Table -->
     <div class="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
       <div class="p-4 border-b border-slate-100 bg-slate-50/50 flex items-center justify-between">
-        <h3 class="font-bold text-slate-700 text-sm tracking-wide uppercase">${m.label} Data Repository Matrix</h3>
+        <h3 class="font-bold text-slate-700 text-sm tracking-wide uppercase">${m.label}</h3>
       </div>
       <div class="overflow-x-auto">
         <table class="w-full text-sm">
           <thead class="bg-slate-50 border-b border-slate-200 text-left text-xs uppercase tracking-wider font-semibold text-slate-600">
-            <tr>${cols.length?cols.map(c=>`<th class="px-4 py-3">${escapeHtml(c)}</th>`).join(''):'<th class="px-4 py-3">Value Matrix</th>'}<th class="px-4 py-3 text-right">Actions</th></tr>
+            <tr>${cols.length?cols.map(c=>`<th class="px-4 py-3">${escapeHtml(c)}</th>`).join(''):'<th class="px-4 py-3">Value</th>'}<th class="px-4 py-3 text-right">Actions</th></tr>
           </thead>
           <tbody class="divide-y divide-slate-100">
-            ${rows.length===0?`<tr><td colspan="${(cols.length||1)+1}" class="text-center text-slate-400 py-12 bg-slate-50/30">No active ${m.label.toLowerCase()} logs structural records. Provision entries by interacting with <b>+ New Record</b> layout above.</td></tr>`:
+            ${rows.length===0?`<tr><td colspan="${(cols.length||1)+1}" class="text-center text-slate-400 py-12 bg-slate-50/30">No ${m.label.toLowerCase()} records yet. Add one with <b>+ New Record</b> above, or create one in Acacia ERP and hit <b>↻ Sync</b>.</td></tr>`:
             rows.map((r,i)=>`<tr class="hover:bg-slate-50/80 transition-colors align-middle">
               ${cols.length?cols.map(c=>`<td class="px-4 py-3 max-w-xs truncate font-medium text-slate-700">${escapeHtml(cellText(r?.[c]))}</td>`).join(''):`<td class="px-4 py-3 font-medium text-slate-700">${escapeHtml(cellText(r))}</td>`}
               <td class="px-4 py-3 text-right"><button onclick="delRow(${i})" class="text-red-500 hover:text-red-700 font-semibold text-xs tracking-wide uppercase transition-colors">Delete</button></td>
@@ -481,6 +546,133 @@ function renderView(){
         </table>
       </div>
     </div>`;
+}
+
+/* ---------------- Stock: dedicated view, matches Acacia ERP's per-warehouse
+   inventory_<warehouse> records exactly (name, sku, qty, buyPrice, sellPrice,
+   warehouse) instead of a generic key/value table. ---------------- */
+function renderStockView(){
+  const rows = store.stock || [];
+  const low = rows.filter(r=>{ const q=parseFloat(r.qty); return !isNaN(q) && q<=REORDER_LEVEL; });
+  const value = rows.reduce((sum,r)=> sum + (parseFloat(r.qty)||0) * (parseFloat(r.sellPrice)||0), 0);
+  const whOptions = (warehouseList.length?warehouseList:[...new Set(rows.map(r=>r.warehouse).filter(Boolean))])
+    .map(w=>`<option value="${escapeHtml(w)}">${escapeHtml(w)}</option>`).join('');
+
+  view.innerHTML = `
+    <div class="mb-6 flex items-center justify-between flex-wrap gap-3">
+      <div>
+        <h2 class="text-3xl font-bold tracking-tight text-slate-900">Welcome, ${escapeHtml(currentUser()?.companyName || 'your workspace')}</h2>
+        <p class="text-sm text-slate-500">Stock, live-synced with Acacia ERP's Inventory Hub</p>
+      </div>
+      <div class="flex gap-2">
+        <button onclick="exportCsv()" class="px-3 py-2 text-sm border border-slate-200 rounded-lg bg-white shadow-sm hover:bg-slate-50 transition-all">Export CSV</button>
+        <button onclick="toggleStockForm()" class="px-4 py-2 text-sm bg-acacia-600 hover:bg-acacia-700 text-white rounded-lg shadow-sm font-semibold transition-all">+ Add Item</button>
+      </div>
+    </div>
+
+    <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+      <div class="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex flex-col justify-between">
+        <span class="text-sm font-semibold text-slate-500 uppercase tracking-wider">Stock Overview</span>
+        <span class="text-2xl font-bold text-slate-800 mt-2">${rows.length} Item${rows.length===1?'':'s'}</span>
+      </div>
+      <div class="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex flex-col justify-between">
+        <span class="text-sm font-semibold text-slate-500 uppercase tracking-wider">Estimated Sell Value</span>
+        <span class="text-2xl font-bold text-acacia-700 mt-2">KES ${value.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</span>
+      </div>
+      <div class="bg-white p-5 rounded-xl border ${low.length?'border-amber-300 bg-amber-50':'border-slate-200'} shadow-sm flex flex-col justify-between">
+        <span class="text-sm font-semibold ${low.length?'text-amber-700':'text-slate-500'} uppercase tracking-wider">Low Stock (≤ ${REORDER_LEVEL})</span>
+        <span class="text-2xl font-bold ${low.length?'text-amber-700':'text-slate-800'} mt-2">${low.length} Item${low.length===1?'':'s'}</span>
+      </div>
+      <div class="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex flex-col justify-between">
+        <span class="text-sm font-semibold text-slate-500 uppercase tracking-wider">Synced with Acacia ERP</span>
+        <span class="text-sm font-mono text-slate-600 mt-2 bg-slate-50 p-1.5 rounded border border-slate-100 truncate">company_state.inventory_*</span>
+      </div>
+    </div>
+
+    <div id="stockFormCard" class="hidden bg-white rounded-xl border border-slate-200 shadow-sm p-5 mb-6">
+      <h3 class="font-bold text-slate-700 text-sm tracking-wide uppercase mb-3">Add Item</h3>
+      <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        <input id="sfName" placeholder="Item Name" class="h-10 px-3 rounded-lg border border-slate-300 text-sm"/>
+        <input id="sfSku" placeholder="SKU / Code" class="h-10 px-3 rounded-lg border border-slate-300 text-sm"/>
+        <input id="sfQty" type="number" placeholder="Quantity" class="h-10 px-3 rounded-lg border border-slate-300 text-sm"/>
+        <input id="sfBuy" type="number" placeholder="Buy Price" class="h-10 px-3 rounded-lg border border-slate-300 text-sm"/>
+        <input id="sfSell" type="number" placeholder="Sell Price" class="h-10 px-3 rounded-lg border border-slate-300 text-sm"/>
+        <div class="flex gap-2">
+          <select id="sfWarehouse" class="h-10 px-3 rounded-lg border border-slate-300 text-sm flex-1">
+            <option value="">Select Warehouse</option>${whOptions}
+          </select>
+        </div>
+      </div>
+      <div class="mt-3 flex gap-2">
+        <button onclick="saveStockItem()" class="px-4 py-2 text-sm bg-acacia-600 hover:bg-acacia-700 text-white rounded-lg font-semibold">Save Item</button>
+        <button onclick="toggleStockForm()" class="px-4 py-2 text-sm border border-slate-200 rounded-lg">Cancel</button>
+      </div>
+      <p class="text-[11px] text-slate-500 mt-2">Warehouse list comes from Acacia ERP's Settings → Warehouses. If it's empty, add a warehouse in Acacia ERP first, then hit ↻ Sync.</p>
+    </div>
+
+    <div class="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+      <div class="p-4 border-b border-slate-100 bg-slate-50/50 flex items-center justify-between">
+        <h3 class="font-bold text-slate-700 text-sm tracking-wide uppercase">Stock — All Warehouses</h3>
+      </div>
+      <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead class="bg-slate-50 border-b border-slate-200 text-left text-xs uppercase tracking-wider font-semibold text-slate-600">
+            <tr><th class="px-4 py-3">Product</th><th class="px-4 py-3">SKU</th><th class="px-4 py-3">Warehouse</th><th class="px-4 py-3">Qty</th><th class="px-4 py-3">Buy Price</th><th class="px-4 py-3">Sell Price</th><th class="px-4 py-3 text-right">Actions</th></tr>
+          </thead>
+          <tbody class="divide-y divide-slate-100">
+            ${rows.length===0?`<tr><td colspan="7" class="text-center text-slate-400 py-12 bg-slate-50/30">No stock yet. Add an item above, or add one in Acacia ERP and hit <b>↻ Sync</b>.</td></tr>`:
+            rows.map((r,i)=>{ const q=parseFloat(r.qty); const isLow = !isNaN(q) && q<=REORDER_LEVEL;
+              return `<tr class="hover:bg-slate-50/80 transition-colors align-middle ${isLow?'bg-amber-50/60':''}">
+              <td class="px-4 py-3 font-medium text-slate-700">${escapeHtml(cellText(r.name))}</td>
+              <td class="px-4 py-3 text-slate-500">${escapeHtml(cellText(r.sku))}</td>
+              <td class="px-4 py-3 text-slate-500">${escapeHtml(cellText(r.warehouse))}</td>
+              <td class="px-4 py-3 ${isLow?'text-amber-700 font-bold':'text-slate-700'}">${escapeHtml(cellText(r.qty))}${isLow?' ⚠️':''}</td>
+              <td class="px-4 py-3 text-slate-500">${escapeHtml(cellText(r.buyPrice))}</td>
+              <td class="px-4 py-3 text-slate-500">${escapeHtml(cellText(r.sellPrice))}</td>
+              <td class="px-4 py-3 text-right"><button onclick="delStockItem(${i})" class="text-red-500 hover:text-red-700 font-semibold text-xs tracking-wide uppercase transition-colors">Delete</button></td>
+            </tr>`; }).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>`;
+}
+function toggleStockForm(){ document.getElementById('stockFormCard')?.classList.toggle('hidden'); }
+async function saveStockItem(){
+  const warehouse = sfWarehouse.value;
+  if(!warehouse){ alert('Select a warehouse.'); return; }
+  const name = sfName.value.trim();
+  const qty = parseFloat(sfQty.value);
+  if(!name || isNaN(qty)){ alert('Item name and quantity are required.'); return; }
+  const item = { name, sku: sfSku.value.trim(), qty, buyPrice: parseFloat(sfBuy.value)||0, sellPrice: parseFloat(sfSell.value)||0, active:true, history:[] };
+
+  setSync('saving…','busy');
+  const key='inventory_'+warehouse;
+  let existing=[];
+  try{
+    const c=currentCompanyId();
+    const { data } = await sb.from('company_state').select('value').eq('company_id',c).eq('key',key).maybeSingle();
+    existing = parseVal(data?.value); if(!Array.isArray(existing)) existing=[];
+  }catch(e){}
+  existing.push(item);
+  if(await pushStockFor(warehouse, existing)){
+    setSync('synced · '+(currentUser()?.companyName||'workspace'),'ok');
+    await pullStock(); toggleStockForm(); renderStockView();
+  }
+}
+async function delStockItem(i){
+  if(!confirm('Delete this stock item from Acacia ERP?')) return;
+  const row = store.stock[i];
+  const loc = stockKeys[i];
+  if(!loc){ await pullStock(); renderStockView(); return; }
+  setSync('saving…','busy');
+  const c=currentCompanyId();
+  try{
+    const { data } = await sb.from('company_state').select('value').eq('company_id',c).eq('key',loc.key).maybeSingle();
+    let items = parseVal(data?.value); if(!Array.isArray(items)) items=[];
+    items.splice(loc.index,1);
+    await pushStockFor(row.warehouse, items);
+  }catch(e){ console.warn(e); }
+  await pullStock(); renderStockView();
 }
 
 async function addRow(){
