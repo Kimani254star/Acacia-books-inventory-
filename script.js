@@ -772,10 +772,11 @@ boot();
 
 
 /* ---------------- Operation forms (match the Books Inventory tabs: Movement, Amendments, Price List, Shipments) ---------------- */
-const OPFORMS = { movement:'New Stock Transfer Order', amendments:'New Item Stock Adjustment', priceList:'Item Pricing Details', shipments:'Add Shipment' };
+const OPFORMS = { movement:'New Stock Transfer Order', amendments:'New Item Stock Adjustment', priceList:'Item Pricing Details', shipments:'Add Shipment', bundleItems:'Composite Item Details', bulkAdj:'Bulk Adjustment' };
 function renderView(){
   renderViewBase();
   if(OPFORMS[active]) view.firstElementChild?.insertAdjacentHTML('afterend', opFormHTML(active));
+  if(active==='bulkAdj') baLoadLog();
 }
 function whNames(){
   const set=new Set((warehouseList||[]).map(w=>typeof w==='object'?(w.name||w.id):w));
@@ -798,6 +799,10 @@ function opFormHTML(id){
   if(id==='priceList') body=`${fld('Warehouse',selWh('plWh',"refreshItems('plWh','plItem')"))}${fld('Item',`<select id="plItem" class="${_inp}">${itemOpts('')}</select>`)}${fld('New selling price',`<input id="plSell" type="number" class="${_inp}">`)}${fld('New cost price',`<input id="plCost" type="number" class="${_inp}">`)}${fld('Tax rate',`<input id="plTax" class="${_inp}" placeholder="e.g. 16%">`)}${fld('Effective date',`<input id="plDate" type="date" value="${date}" class="${_inp}">`)}<div class="flex items-end">${btn('doPrice()','Update Price')}</div>`;
   if(id==='shipments'){ const n='SHP-'+String((store.shipments||[]).length+1).padStart(4,'0');
     body=`${fld('Shipment no.',`<input id="shNo" value="${n}" class="${_inp}">`)}${fld('Customer',`<input id="shCust" class="${_inp}">`)}${fld('Item',`<input id="shItem" class="${_inp}">`)}${fld('Date',`<input id="shDate" type="date" value="${date}" class="${_inp}">`)}${fld('Origin',`<input id="shOrg" class="${_inp}">`)}${fld('Destination',`<input id="shDest" class="${_inp}">`)}${fld('Carrier',`<input id="shCar" class="${_inp}">`)}${fld('Tracking no.',`<input id="shTrk" class="${_inp}">`)}<div class="flex items-end">${btn('doShipment()','Add Shipment')}</div>`; }
+  if(id==='bundleItems'){
+    const comp=n=>`<div class="grid grid-cols-3 gap-2 md:col-span-3">${selWh('bnWh'+n,`refreshItems('bnWh${n}','bnItem${n}')`)}<select id="bnItem${n}" class="${_inp}">${itemOpts('')}</select><input id="bnUsed${n}" type="number" min="0" placeholder="Qty used per bundle" class="${_inp}"></div>`;
+    body=`${fld('Bundle name',`<input id="bnName" class="${_inp}">`)}${fld('Destination warehouse',selWh('bnTo'))}${fld('Quantity to build',`<input id="bnQty" type="number" min="1" class="${_inp}">`)}${fld('Buy price',`<input id="bnBuy" type="number" class="${_inp}">`)}${fld('Sell price',`<input id="bnSell" type="number" class="${_inp}">`)}${fld('Sell VAT',`<input id="bnSellVat" class="${_inp}" placeholder="e.g. 16%">`)}<div class="md:col-span-3 text-xs font-semibold text-slate-500 uppercase">Associated component items</div>${comp(1)}${comp(2)}${comp(3)}<div>${btn('doBundle()','Create Bundle')}</div>`; }
+  if(id==='bulkAdj') body=`${fld('Warehouse',selWh('baWh','baRows()'))}${fld('Date',`<input id="baDate" type="date" value="${date}" class="${_inp}">`)}<div class="flex items-end gap-2">${btn('doBulkAdj(false)','Apply All')}<button onclick="doBulkAdj(true)" class="px-4 py-2 text-sm border border-slate-200 rounded-lg">Save Draft</button></div><div class="md:col-span-3 overflow-x-auto"><table class="w-full text-sm"><thead class="text-left text-xs uppercase text-slate-500"><tr><th class="py-2">Product</th><th>SKU</th><th>Current qty</th><th>Adjustment (+/-)</th><th>Reason</th></tr></thead><tbody id="baBody"><tr><td colspan="5" class="py-4 text-slate-400">Select a warehouse to load its products.</td></tr></tbody></table></div><div id="baLog" class="md:col-span-3"></div>`;
   return `<div id="opForm" class="bg-white rounded-xl border border-slate-200 shadow-sm p-5 mb-6"><h3 class="font-bold text-slate-700 text-sm uppercase tracking-wide mb-4">${OPFORMS[id]}</h3><div class="grid grid-cols-1 md:grid-cols-3 gap-4">${body}</div></div>`;
 }
 const gv=id=>document.getElementById(id).value;
@@ -849,4 +854,52 @@ async function doShipment(){
   const rec={id:crypto.randomUUID(),shipmentNo:gv('shNo'),customer:gv('shCust').trim(),item:gv('shItem').trim(),date:gv('shDate'),origin:gv('shOrg').trim(),destination:gv('shDest').trim(),carrier:gv('shCar').trim(),trackingNo:gv('shTrk').trim()};
   if(!(rec.customer&&rec.date&&rec.item&&rec.origin&&rec.destination)) return alert('Please fill all required shipment fields.');
   if(await logRow('shipments',rec)){ renderView(); alert('✅ Shipment added successfully.'); }
+}
+
+async function doBundle(){
+  const g=id=>document.getElementById(id).value;
+  const b={name:g('bnName').trim(),toWarehouse:g('bnTo'),qty:parseFloat(g('bnQty'))||0,buyPrice:parseFloat(g('bnBuy'))||0,sellPrice:parseFloat(g('bnSell'))||0,sellVAT:g('bnSellVat'),date:new Date().toISOString(),
+    items:[1,2,3].map(n=>({warehouse:g('bnWh'+n),item:g('bnItem'+n),qtyUsed:parseFloat(g('bnUsed'+n))||0})).filter(x=>x.item)};
+  if(!b.name||!b.toWarehouse||!b.qty||!b.items.length) return alert('Fill required fields');
+  const cache={};
+  for(const c of b.items){
+    cache[c.warehouse]=cache[c.warehouse]||await loadWh(c.warehouse);
+    const it=findIt(cache[c.warehouse],c.item);
+    if(!it||it.qty<c.qtyUsed*b.qty) return alert('Not enough stock of '+c.item+' in '+c.warehouse+' for '+b.qty+' bundle(s).');
+  }
+  for(const c of b.items){ findIt(cache[c.warehouse],c.item).qty-=c.qtyUsed*b.qty; }
+  const dst=cache[b.toWarehouse]||await loadWh(b.toWarehouse); cache[b.toWarehouse]=dst;
+  dst.push({name:b.name,sku:'BUNDLE-'+Date.now(),qty:b.qty,buyPrice:b.buyPrice,sellPrice:b.sellPrice,sellVat:b.sellVAT,isBundle:true});
+  for(const w of Object.keys(cache)) if(!(await pushStockFor(w,cache[w]))) return;
+  await logRow('bundleItems',b);
+  await pullStock(); renderView(); alert('Bundle created.');
+}
+function baRows(){
+  const w=document.getElementById('baWh').value, rows=(store.stock||[]).filter(r=>r.warehouse===w);
+  document.getElementById('baBody').innerHTML=rows.map((r,i)=>`<tr class="border-t border-slate-100" data-key="${escapeHtml(r.sku||r.name)}"><td class="py-2">${escapeHtml(r.name)}</td><td>${escapeHtml(r.sku||'')}</td><td>${r.qty}</td><td><input type="number" class="baAdj w-28 border border-slate-200 rounded px-2 py-1"></td><td><input class="baWhy w-full border border-slate-200 rounded px-2 py-1"></td></tr>`).join('')||'<tr><td colspan="5" class="py-4 text-slate-400">No products in this warehouse.</td></tr>';
+}
+async function doBulkAdj(draft){
+  const w=document.getElementById('baWh').value; if(!w) return alert('Select a warehouse');
+  const d=document.getElementById('baDate').value, trs=[...document.querySelectorAll('#baBody tr[data-key]')];
+  const items=await loadWh(w), key='bulkAdjustments_'+w; let log=[];
+  try{ const { data } = await sb.from('company_state').select('value').eq('company_id',currentCompanyId()).eq('key',key).maybeSingle(); log=parseVal(data?.value); if(!Array.isArray(log)) log=[]; }catch(e){}
+  let n=0;
+  trs.forEach(tr=>{
+    const a=parseFloat(tr.querySelector('.baAdj').value||0); if(!a) return;
+    const it=findIt(items,tr.dataset.key); if(it&&!draft) it.qty=(parseFloat(it.qty)||0)+a;
+    log.push({id:'BA-'+Date.now()+'-'+n,warehouse:w,itemId:tr.dataset.key,item:it?it.name:tr.dataset.key,adjustment:a,reason:tr.querySelector('.baWhy').value||'',status:draft?'Draft':'Applied',date:d,createdAt:new Date().toISOString()}); n++;
+  });
+  if(!n) return alert('Enter at least one adjustment');
+  if(!draft && !(await pushStockFor(w,items))) return;
+  const { error } = await sb.from('company_state').upsert({company_id:currentCompanyId(),key,value:JSON.stringify(log),updated_at:new Date().toISOString()},{onConflict:'company_id,key'});
+  if(error) return alert('Save failed: '+error.message);
+  await pullStock(); renderView(); document.getElementById('baWh').value=w; baRows(); alert(draft?'Draft saved.':'Bulk adjustments applied.');
+}
+async function baLoadLog(){
+  const el=document.getElementById('baLog'); if(!el) return;
+  try{
+    const { data } = await sb.from('company_state').select('key,value').eq('company_id',currentCompanyId()).like('key','bulkAdjustments\\_%');
+    const rows=(data||[]).flatMap(r=>{const a=parseVal(r.value);return Array.isArray(a)?a:[]}).sort((a,b)=>String(b.createdAt).localeCompare(String(a.createdAt))).slice(0,50);
+    el.innerHTML=`<h4 class="font-bold text-slate-700 text-sm uppercase tracking-wide mt-4 mb-2">Bulk Adjustment Log</h4><table class="w-full text-sm"><thead class="text-left text-xs uppercase text-slate-500"><tr><th>Date</th><th>Warehouse</th><th>Product</th><th>Change</th><th>Reason</th><th>Status</th></tr></thead><tbody>${rows.map(r=>`<tr class="border-t border-slate-100"><td class="py-1">${escapeHtml(r.date)}</td><td>${escapeHtml(r.warehouse)}</td><td>${escapeHtml(r.item)}</td><td>${r.adjustment>0?'+':''}${r.adjustment}</td><td>${escapeHtml(r.reason)}</td><td>${escapeHtml(r.status)}</td></tr>`).join('')||'<tr><td colspan="6" class="py-3 text-slate-400">No bulk adjustments yet.</td></tr>'}</tbody></table>`;
+  }catch(e){}
 }
