@@ -464,7 +464,8 @@ async function pushOne(m){
 }
 
 function renderNav(){
-  navList.innerHTML = MODULES.map(m=>`<button onclick="go('${m.id}')" class="nav-btn w-full text-left px-3 py-2 rounded-lg hover:bg-slate-100 ${m.id===active?'active':''}">${m.label}</button>`).join('');
+  navList.innerHTML = MODULES.map(m=>`<button onclick="go('${m.id}')" class="nav-btn w-full text-left px-3 py-2 rounded-lg hover:bg-slate-100 ${m.id===active?'active':''}">${m.label}</button>`).join('')
+    + `<div class="text-[10px] font-bold uppercase text-slate-400 px-2 pt-4 pb-1">Settings</div><button onclick="go('appearance')" class="nav-btn w-full text-left px-3 py-2 rounded-lg hover:bg-slate-100 ${active==='appearance'?'active':''}">🎨 Appearance</button>`;
 }
 function go(id){ active=id; renderNav(); renderView(); }
 
@@ -774,6 +775,7 @@ boot();
 /* ---------------- Operation forms (match the Books Inventory tabs: Movement, Amendments, Price List, Shipments) ---------------- */
 const OPFORMS = { movement:'New Stock Transfer Order', amendments:'New Item Stock Adjustment', priceList:'Item Pricing Details', shipments:'Add Shipment', bundleItems:'Composite Item Details', bulkAdj:'Bulk Adjustment' };
 function renderView(){
+  if(active==='appearance'){ view.innerHTML = '<div class="mb-4"><h2 class="text-2xl font-bold text-slate-800">🎨 Appearance</h2><p class="text-sm text-slate-500">Sidebar colour, text colour, font and font size.</p></div><div data-acacia-appearance></div>'; return; }
   renderViewBase();
   if(OPFORMS[active]) view.firstElementChild?.insertAdjacentHTML('afterend', opFormHTML(active));
   if(active==='bulkAdj') baLoadLog();
