@@ -94,7 +94,7 @@ function hpShowLogin(tab){
   var rawSet = Storage.prototype.setItem;
   var low = function (v) { return String(v == null ? '' : v).trim().toLowerCase(); };
   var enc = encodeURIComponent;
-  var isCloudId = function (id) { return /^ACC-\d+$/i.test(String(id || '')); };
+  var isCloudId = function (id) { return /^(ACC-\d+|company_[A-Za-z0-9_]+)$/i.test(String(id || '')); };
   function err(code, msg) { var e = new Error(msg || code); e.code = code; return e; }
 
   async function req(path, opt) {
@@ -130,6 +130,12 @@ function hpShowLogin(tab){
   /* deleted / suspended companies are blocked (fails open if the cloud can't be reached) */
   async function gate(cid, login) {
     try { if ((await rpc('acx_account_state', { p_company: low(cid), p_login: low(login) })) === 'deleted') return 'This account was removed by Acacia support.'; } catch (e) {}
+    try {
+      var acc = await rpc('acx_app_access', { p_company: String(cid || ''), p_login: low(login), p_app: String((cfg && cfg.app) || '').toLowerCase() });
+      if (acc === 'not_paid') return 'Your company has not paid for this app yet. Ask your admin to add it to your plan in Acacia Books (Settings > Subscription), then sign in again.';
+      if (acc === 'expired') return 'Your company subscription has ended. Renew it in Acacia Books to open this app again.';
+      if (acc === 'no_access') return 'Your admin has not given you access to this app. Ask them to tick it under User Management > App access in Acacia Books.';
+    } catch (e) {}
     try {
       var r = await req('acacia_company_status?select=status&company_id=eq.' + enc(cid));
       if (r.ok) { var j = await r.json(); var s = j[0] && j[0].status; if (s === 'pending') return 'Your company is waiting for approval by Acacia support. You will be able to sign in as soon as it is approved.'; if (s && s !== 'active') return 'Your company account is "' + s + '". Please contact Acacia support.'; }
@@ -394,6 +400,7 @@ function parseVal(v){
   try{ const p=JSON.parse(v); return p; }catch{ return []; }
 }
 
+let pullErr=null;
 async function pullStock(){
   const c=currentCompanyId();
   try{
@@ -409,7 +416,7 @@ async function pullStock(){
       });
     });
     store.stock = rows;
-  }catch(e){ console.warn('pullStock failed', e); store.stock = []; }
+  }catch(e){ console.warn('pullStock failed', e); pullErr=(e&&e.message)||String(e); store.stock = []; }
 }
 async function pushStockFor(warehouse, items){
   const c=currentCompanyId();
@@ -426,7 +433,7 @@ async function pullWarehouses(){
     const { data } = await sb.from('company_state').select('value').eq('company_id', c).eq('key','warehouses').maybeSingle();
     const list = parseVal(data?.value);
     warehouseList = Array.isArray(list) ? list.map(w=>w.name||w).filter(Boolean) : [];
-  }catch(e){ warehouseList = []; }
+  }catch(e){ pullErr=(e&&e.message)||String(e); warehouseList = []; }
 }
 
 async function pullOne(m){
@@ -439,15 +446,21 @@ async function pullOne(m){
     store[m.id] = Array.isArray(val) ? val : [];
   } catch(e) {
     console.warn(`Failed pulling key ${m.key}:`, e);
+    pullErr=(e&&e.message)||String(e);
     store[m.id] = [];
   }
 }
 async function pullAll(){
   setSync('syncing…','busy');
   try{
+    pullErr=null;
     await pullWarehouses();
     await Promise.all(MODULES.map(pullOne));
-    setSync('synced · '+(currentUser()?.companyName||'workspace'),'ok');
+    const anyData = warehouseList.length || MODULES.some(m=>Array.isArray(store[m.id]) && store[m.id].length);
+    if(pullErr){ setSync('sync error · '+String(pullErr).slice(0,70),'err'); }
+    else if(!anyData){ setSync('connected · no Books data for company '+currentCompanyId(),'idle'); }
+    else { setSync('synced · '+(currentUser()?.companyName||'workspace'),'ok'); }
+    try{ syncStatus.title = 'Company ID: '+currentCompanyId()+(pullErr?' · '+pullErr:''); }catch(_){}
     renderView();
   }catch(e){ console.warn(e); setSync('sync error','err'); }
 }
@@ -769,7 +782,7 @@ function boot(){
   
   renderNav(); renderView(); pullAll();
 }
-boot();
+/* boot() is called at the very end of this file, after every top-level const (e.g. OPFORMS) exists */
 
 
 /* ---------------- Operation forms (match the Books Inventory tabs: Movement, Amendments, Price List, Shipments) ---------------- */
@@ -905,3 +918,5 @@ async function baLoadLog(){
     el.innerHTML=`<h4 class="font-bold text-slate-700 text-sm uppercase tracking-wide mt-4 mb-2">Bulk Adjustment Log</h4><table class="w-full text-sm"><thead class="text-left text-xs uppercase text-slate-500"><tr><th>Date</th><th>Warehouse</th><th>Product</th><th>Change</th><th>Reason</th><th>Status</th></tr></thead><tbody>${rows.map(r=>`<tr class="border-t border-slate-100"><td class="py-1">${escapeHtml(r.date)}</td><td>${escapeHtml(r.warehouse)}</td><td>${escapeHtml(r.item)}</td><td>${r.adjustment>0?'+':''}${r.adjustment}</td><td>${escapeHtml(r.reason)}</td><td>${escapeHtml(r.status)}</td></tr>`).join('')||'<tr><td colspan="6" class="py-3 text-slate-400">No bulk adjustments yet.</td></tr>'}</tbody></table>`;
   }catch(e){}
 }
+
+boot();
