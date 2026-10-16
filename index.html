@@ -312,17 +312,17 @@
     <main class="flex-1 overflow-auto p-6"><div id="view" class="fade-in"></div></main>
 
     <!-- RIGHT SIDEBAR -->
-    <aside id="rightSidebar" class="hidden w-12 bg-white border-l border-slate-200 p-2 overflow-y-auto shrink-0 flex flex-col items-center space-y-4">
-      <button onclick="toggleAcaciaNotebook()" title="Acacia Notebook" class="w-8 h-8 flex items-center justify-center hover:bg-slate-100 rounded-lg transition-colors text-base">📔</button>
-      <button onclick="toggleWebinarPanel()" title="Webinars" class="w-8 h-8 flex items-center justify-center hover:bg-slate-100 rounded-lg transition-colors text-base">🎥</button>
-      <button onclick="toggleCommPanel()" title="Communication" class="w-8 h-8 flex items-center justify-center hover:bg-slate-100 rounded-lg transition-colors text-base">💬</button>
-      <button onclick="toggleSupportPopup()" title="Support Hub" class="w-8 h-8 flex items-center justify-center hover:bg-slate-100 rounded-lg transition-colors text-base">🎧</button>
-      <button onclick="toggleOrgDetails()" title="Organization Details" class="w-8 h-8 flex items-center justify-center hover:bg-slate-100 rounded-lg transition-colors text-base">🏢</button>
-      <div class="w-6 h-px bg-slate-200 my-1"></div>
-      <button onclick="openGDocs()" title="Google Docs" class="w-8 h-8 flex items-center justify-center hover:bg-slate-100 rounded-lg transition-colors text-base">📄</button>
-      <button onclick="openGSheets()" title="Google Sheets" class="w-8 h-8 flex items-center justify-center hover:bg-slate-100 rounded-lg transition-colors text-base">📊</button>
-      <button onclick="openGPhotos()" title="Google Photos" class="w-8 h-8 flex items-center justify-center hover:bg-slate-100 rounded-lg transition-colors text-base">🖼️</button>
-      <button onclick="openGCalendar()" title="Google Calendar" class="w-8 h-8 flex items-center justify-center hover:bg-slate-100 rounded-lg transition-colors text-base">📅</button>
+    <aside id="rightSidebar" class="hidden w-40 bg-black text-white p-1 overflow-y-auto shrink-0 flex flex-col items-stretch space-y-2">
+      <button onclick="toggleAcaciaNotebook()" title="Acacia Notebook" class="w-full text-left p-1 rounded transition-all duration-300 hover:bg-yellow-400 hover:text-black hover:shadow-lg text-sm">📔 Acacia Notebook</button>
+      <button onclick="toggleWebinarPanel()" title="Webinars" class="w-full text-left p-1 rounded transition-all duration-300 hover:bg-yellow-400 hover:text-black hover:shadow-lg text-sm">🎥 Webinars</button>
+      <button onclick="toggleCommPanel()" title="Team Status" class="w-full text-left p-1 rounded transition-all duration-300 hover:bg-yellow-400 hover:text-black hover:shadow-lg text-sm">💬 Team Status</button>
+      <button onclick="toggleSupportPopup()" title="Support Hub" class="w-full text-left p-1 rounded transition-all duration-300 hover:bg-yellow-400 hover:text-black hover:shadow-lg text-sm">🎧 Support Hub</button>
+      <button onclick="toggleOrgDetails()" title="Organization Details" class="w-full text-left p-1 rounded transition-all duration-300 hover:bg-yellow-400 hover:text-black hover:shadow-lg text-sm">🏢 Organization Details</button>
+      <div class="w-full h-px bg-white/25 my-1"></div>
+      <button onclick="openGDocs()" title="Google Docs" class="w-full text-left p-1 rounded transition-all duration-300 hover:bg-yellow-400 hover:text-black hover:shadow-lg text-sm">📄 Google Docs</button>
+      <button onclick="openGSheets()" title="Google Sheets" class="w-full text-left p-1 rounded transition-all duration-300 hover:bg-yellow-400 hover:text-black hover:shadow-lg text-sm">📊 Google Sheets</button>
+      <button onclick="openGPhotos()" title="Google Photos" class="w-full text-left p-1 rounded transition-all duration-300 hover:bg-yellow-400 hover:text-black hover:shadow-lg text-sm">🖼️ Google Photos</button>
+      <button onclick="openGCalendar()" title="Google Calendar" class="w-full text-left p-1 rounded transition-all duration-300 hover:bg-yellow-400 hover:text-black hover:shadow-lg text-sm">📅 Google Calendar</button>
     </aside>
   </div>
 
@@ -459,5 +459,6 @@
 </div>
 
 <script src="script.js"></script>
+<script src="acacia-sidebar.js"></script>
 </body>
 </html>
