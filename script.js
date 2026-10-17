@@ -566,7 +566,7 @@ function renderViewBase(){
             ${rows.length===0?`<tr><td colspan="${(cols.length||1)+1}" class="text-center text-slate-400 py-12 bg-slate-50/30">No ${m.label.toLowerCase()} records yet. Add one with <b>+ New Record</b> above, or create one in Acacia ERP and hit <b>↻ Sync</b>.</td></tr>`:
             rows.map((r,i)=>`<tr class="hover:bg-slate-50/80 transition-colors align-middle">
               ${cols.length?cols.map(c=>`<td class="px-4 py-3 max-w-xs truncate font-medium text-slate-700">${escapeHtml(cellText(r?.[c]))}</td>`).join(''):`<td class="px-4 py-3 font-medium text-slate-700">${escapeHtml(cellText(r))}</td>`}
-              <td class="px-4 py-3 text-right"><button onclick="delRow(${i})" class="text-red-500 hover:text-red-700 font-semibold text-xs tracking-wide uppercase transition-colors">Delete</button></td>
+              <td class="px-4 py-3 acx-cell">${ACX_ACT({edit:`editRow(${i})`, clone:`cloneRow(${i})`, del:`delRow(${i})`})}</td>
             </tr>`).join('')}
           </tbody>
         </table>
@@ -655,7 +655,7 @@ function renderStockView(){
               <td class="px-4 py-3 ${isLow?'text-amber-700 font-bold':'text-slate-700'}">${escapeHtml(cellText(r.qty))}${isLow?' ⚠️':''}</td>
               <td class="px-4 py-3 text-slate-500">${escapeHtml(cellText(r.buyPrice))}</td>
               <td class="px-4 py-3 text-slate-500">${escapeHtml(cellText(r.sellPrice))}</td>
-              <td class="px-4 py-3 text-right"><button onclick="delStockItem(${i})" class="text-red-500 hover:text-red-700 font-semibold text-xs tracking-wide uppercase transition-colors">Delete</button></td>
+              <td class="px-4 py-3 acx-cell">${ACX_ACT({edit:`editStockItem(${i})`, clone:`cloneStockItem(${i})`, del:`delStockItem(${i})`, title:'Stock — '+(r.name||'')})}</td>
             </tr>`; }).join('')}
           </tbody>
         </table>
@@ -712,6 +712,61 @@ async function addRow(){
   for(const k of keys){ const v = prompt(k+':'); if(v===null) return; rec[k]=v; }
   store[m.id] = [...rows, rec];
   if(await pushOne(m)) renderView(); else await pullOne(m).then(renderView);
+}
+/* Edit / Clone — same actions as Books */
+async function editRow(i){
+  const m = MODULES.find(x=>x.id===active); const src = (store[m.id]||[])[i]; if(src==null) return;
+  if(typeof src!=='object'){ const v = prompt('Value:', cellText(src)); if(v===null) return; store[m.id][i]=v; }
+  else {
+    const rec = Object.assign({}, src);
+    for(const k of Object.keys(src)){
+      if(src[k]!==null && typeof src[k]==='object') continue;
+      const v = prompt(k+':', cellText(src[k])); if(v===null) return;
+      rec[k] = typeof src[k]==='number' && v.trim()!=='' && !isNaN(v) ? parseFloat(v) : v;
+    }
+    store[m.id][i] = rec;
+  }
+  if(await pushOne(m)) renderView(); else await pullOne(m).then(renderView);
+}
+async function cloneRow(i){
+  const m = MODULES.find(x=>x.id===active); const src = (store[m.id]||[])[i]; if(src==null) return;
+  const copy = JSON.parse(JSON.stringify(src));
+  if(copy && typeof copy==='object'){ if('id' in copy) copy.id = Date.now(); if(typeof copy.name==='string') copy.name += ' (copy)'; }
+  store[m.id] = [...store[m.id], copy];
+  if(await pushOne(m)) renderView(); else await pullOne(m).then(renderView);
+}
+async function stockMutate(i, fn){
+  const row = store.stock[i], loc = stockKeys[i];
+  if(!row || !loc){ await pullStock(); renderStockView(); return; }
+  setSync('saving…','busy');
+  try{
+    const { data } = await sb.from('company_state').select('value').eq('company_id',currentCompanyId()).eq('key',loc.key).maybeSingle();
+    let items = parseVal(data?.value); if(!Array.isArray(items)) items=[];
+    if(fn(items, loc.index)===false){ setSync('synced','ok'); return; }
+    if(await pushStockFor(row.warehouse, items)) setSync('synced · '+(currentUser()?.companyName||'workspace'),'ok');
+  }catch(e){ console.warn(e); }
+  await pullStock(); renderStockView();
+}
+async function editStockItem(i){
+  const r = store.stock[i]; if(!r) return;
+  const name = prompt('Item name:', r.name||''); if(name===null) return;
+  const sku = prompt('SKU / Code:', r.sku||''); if(sku===null) return;
+  const qty = prompt('Quantity:', r.qty??0); if(qty===null) return;
+  const buy = prompt('Buy price:', r.buyPrice??0); if(buy===null) return;
+  const sell = prompt('Sell price:', r.sellPrice??0); if(sell===null) return;
+  if(!name.trim() || isNaN(parseFloat(qty))){ alert('Item name and quantity are required.'); return; }
+  await stockMutate(i, (items, idx) => {
+    if(!items[idx]) return false;
+    items[idx] = Object.assign({}, items[idx], { name:name.trim(), sku:sku.trim(), qty:parseFloat(qty), buyPrice:parseFloat(buy)||0, sellPrice:parseFloat(sell)||0 });
+  });
+}
+async function cloneStockItem(i){
+  await stockMutate(i, (items, idx) => {
+    const src = items[idx]; if(!src) return false;
+    const copy = JSON.parse(JSON.stringify(src));
+    copy.name = (src.name||'Item')+' (copy)'; if(copy.sku) copy.sku += '-COPY'; copy.history = [];
+    items.push(copy);
+  });
 }
 async function delRow(i){
   if(!confirm('Delete this record from Acacia ERP?')) return;
