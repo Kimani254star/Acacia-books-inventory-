@@ -417,19 +417,30 @@ let pullErr=null;
 async function pullStock(){
   const c=currentCompanyId();
   try{
-    const { data, error } = await sb.from('company_state').select('key,value').eq('company_id', c).like('key','inventory\\_%');
-    if(error) throw error;
-    const rows=[];
-    (data||[]).forEach(row=>{
+    // fetch every row of this company whose key starts with "inventory" and keep the per-warehouse ones in JS
+    // (avoids relying on LIKE escaping of "_", and pages past the 1000-row API default)
+    let data=[], from=0, page=1000;
+    for(;;){
+      const r = await sb.from('company_state').select('key,value').eq('company_id', c).like('key','inventory%').range(from, from+page-1);
+      if(r.error) throw r.error;
+      data = data.concat(r.data||[]);
+      if(!r.data || r.data.length<page) break;
+      from += page;
+    }
+    const rows=[]; const keys={};
+    data.filter(row=>/^inventory_/.test(row.key)).sort((a,b)=>a.key<b.key?-1:1).forEach(row=>{
       const warehouse = row.key.replace(/^inventory_/, '');
       const items = parseVal(row.value);
       (Array.isArray(items)?items:[]).forEach((it,i)=>{
+        if(!it || typeof it!=='object') return;
         rows.push(Object.assign({}, it, { warehouse }));
-        stockKeys[rows.length-1] = { key: row.key, index: i };
+        keys[rows.length-1] = { key: row.key, index: i };
       });
     });
+    Object.keys(stockKeys).forEach(k=>delete stockKeys[k]);
+    Object.assign(stockKeys, keys);
     store.stock = rows;
-  }catch(e){ console.warn('pullStock failed', e); pullErr=(e&&e.message)||String(e); store.stock = []; }
+  }catch(e){ console.warn('pullStock failed', e); pullErr=(e&&e.message)||String(e); if(!Array.isArray(store.stock)) store.stock = []; /* keep what we already had */ }
 }
 async function pushStockFor(warehouse, items){
   const c=currentCompanyId();
@@ -580,7 +591,7 @@ function renderViewBase(){
 function renderStockView(){
   const rows = store.stock || [];
   const low = rows.filter(r=>{ const q=parseFloat(r.qty); return !isNaN(q) && q<=REORDER_LEVEL; });
-  const value = rows.reduce((sum,r)=> sum + (parseFloat(r.qty)||0) * (parseFloat(r.sellPrice)||0), 0);
+  const value = rows.reduce((sum,r)=> sum + (parseFloat(r.qty)||0) * (parseFloat(r.buyPrice)||0), 0); // stock is valued at cost (buying price), like Books
   const whOptions = (warehouseList.length?warehouseList:[...new Set(rows.map(r=>r.warehouse).filter(Boolean))])
     .map(w=>`<option value="${escapeHtml(w)}">${escapeHtml(w)}</option>`).join('');
 
@@ -602,7 +613,7 @@ function renderStockView(){
         <span class="text-2xl font-bold text-slate-800 mt-2">${rows.length} Item${rows.length===1?'':'s'}</span>
       </div>
       <div class="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex flex-col justify-between">
-        <span class="text-sm font-semibold text-slate-500 uppercase tracking-wider">Estimated Sell Value</span>
+        <span class="text-sm font-semibold text-slate-500 uppercase tracking-wider">Stock Value (at buying price)</span>
         <span class="text-2xl font-bold text-acacia-700 mt-2">KES ${value.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</span>
       </div>
       <div class="bg-white p-5 rounded-xl border ${low.length?'border-amber-300 bg-amber-50':'border-slate-200'} shadow-sm flex flex-col justify-between">
@@ -988,3 +999,30 @@ async function baLoadLog(){
 }
 
 boot();
+
+/* ---- keep Stock in step with Books: re-pull on a timer, when the tab regains focus, and skip while the user is typing ---- */
+(function(){
+  let busy=false, last='';
+  async function refreshStock(){
+    if(busy || document.hidden || !currentUser()) return;
+    busy=true;
+    try{
+      await pullWarehouses();
+      await pullStock();
+      const sig=JSON.stringify(store.stock||[]);
+      if(sig!==last){
+        last=sig;
+        if(active==='stock'){
+          const f=document.getElementById('stockFormCard');
+          const ae=document.activeElement;
+          const typing=ae && /^(INPUT|SELECT|TEXTAREA)$/.test(ae.tagName);
+          if(!(f && !f.classList.contains('hidden')) && !typing) renderView();
+        }
+      }
+    }catch(e){ console.warn('stock refresh failed', e); }
+    finally{ busy=false; }
+  }
+  setInterval(refreshStock, 20000);
+  document.addEventListener('visibilitychange', function(){ if(!document.hidden) refreshStock(); });
+  window.addEventListener('focus', refreshStock);
+})();
