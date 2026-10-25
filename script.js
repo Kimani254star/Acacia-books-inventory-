@@ -608,6 +608,13 @@ function renderStockView(){
         <p class="text-sm text-slate-500">Stock, live-synced with Acacia ERP's Inventory Hub</p>
       </div>
       <div class="flex gap-2">
+        <select id="impWarehouse" onchange="window.__impWh=this.value" class="h-9 px-2 text-sm border border-slate-200 rounded-lg bg-white shadow-sm">
+          <option value="">Warehouse (import / export)…</option>${(warehouseList.length?warehouseList:[...new Set(rows.map(r=>r.warehouse).filter(Boolean))]).map(w=>`<option value="${escapeHtml(w)}" ${window.__impWh===w?'selected':''}>${escapeHtml(w)}</option>`).join('')}
+        </select>
+        <button onclick="startStockImport()" class="px-3 py-2 text-sm border border-slate-200 rounded-lg bg-white shadow-sm hover:bg-slate-50 transition-all">Import Items</button>
+        <button onclick="downloadStockTemplate()" class="px-3 py-2 text-sm border border-slate-200 rounded-lg bg-white shadow-sm hover:bg-slate-50 transition-all">Template</button>
+        <input type="file" id="impFile" accept=".xlsx,.xls,.csv" class="hidden" onchange="importStockFile(event)">
+        <button onclick="exportStockForBooks()" class="px-3 py-2 text-sm border border-slate-200 rounded-lg bg-white shadow-sm hover:bg-slate-50 transition-all" title="Downloads the selected warehouse in the exact format of Books → Inventory → Import Inventory">Export for Books</button>
         <button onclick="exportCsv()" class="px-3 py-2 text-sm border border-slate-200 rounded-lg bg-white shadow-sm hover:bg-slate-50 transition-all">Export CSV</button>
         <button onclick="toggleStockForm()" class="px-4 py-2 text-sm bg-acacia-600 hover:bg-acacia-700 text-white rounded-lg shadow-sm font-semibold transition-all">+ Add Item</button>
       </div>
@@ -1111,6 +1118,30 @@ function startStockImport(){
   if(!wh){ alert('Please select a warehouse first.'); return; }
   window.__impWh=wh;
   document.getElementById('impFile').click();
+}
+/* Export a warehouse in the same columns as Books -> Inventory export, so it imports straight into Books (Import Inventory). */
+function exportStockForBooks(){
+  const wh=(document.getElementById('impWarehouse')||{}).value||window.__impWh;
+  if(!wh){ alert('Select a warehouse first - Books imports one warehouse at a time.'); return; }
+  const rows=(store.stock||[]).filter(r=>r.warehouse===wh);
+  if(!rows.length){ alert('There are no items in "'+wh+'" to export.'); return; }
+  const head=['Name','SKU','Quantity','Buying Price','Selling Price','Buying VAT Rule','Selling VAT Rule','Buying Account Code','Selling Account Code','Description','Active'];
+  const matrix=rows.map(r=>[r.name||'',r.sku||'',r.qty==null?0:r.qty,r.buyPrice==null?0:r.buyPrice,r.sellPrice==null?0:r.sellPrice,
+    r.buyVat||'',r.sellVat||'',r.buyingAccount||'',r.sellingAccount||'',r.sellDescription||'',r.active===false?'No':'Yes']);
+  const base=String(wh).replace(/[^a-z0-9]+/gi,'_')+'_Inventory_'+new Date().toISOString().slice(0,10);
+  const asCsv=()=>{
+    const q=v=>'"'+String(v==null?'':v).replace(/"/g,'""')+'"';
+    const csv='\ufeff'+[head,...matrix].map(l=>l.map(q).join(',')).join('\r\n');
+    const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'})); a.download=base+'.csv';
+    document.body.appendChild(a); a.click(); setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove();},500);
+  };
+  try{
+    __ensureXLSX(()=>{
+      try{ const ws=XLSX.utils.aoa_to_sheet([head,...matrix]), wb=XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb,ws,String(wh).slice(0,31)); XLSX.writeFile(wb,base+'.xlsx'); }
+      catch(e){ asCsv(); }
+    }, asCsv);
+  }catch(e){ asCsv(); }
 }
 function downloadStockTemplate(){
   const csv='name,sku,qty,buyPrice,sellPrice,buyVat,sellVat,buyingAccount,sellingAccount,sellDescription\r\nSample Item,SKU-001,10,100,150,,,,,\r\n';
