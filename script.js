@@ -433,7 +433,7 @@ async function pullStock(){
       const items = parseVal(row.value);
       (Array.isArray(items)?items:[]).forEach((it,i)=>{
         if(!it || typeof it!=='object') return;
-        rows.push(Object.assign({}, stockView(it), { warehouse }));
+        rows.push(Object.assign({}, it, { warehouse }));
         keys[rows.length-1] = { key: row.key, index: i };
       });
     });
@@ -454,10 +454,11 @@ async function pushStockFor(warehouse, items){
 async function pullWarehouses(){
   const c=currentCompanyId();
   try{
-    const { data } = await sb.from('company_state').select('value').eq('company_id', c).eq('key','warehouses').maybeSingle();
+    const { data, error } = await sb.from('company_state').select('value').eq('company_id', c).eq('key','warehouses').maybeSingle();
+    if(error) throw error;
     const list = parseVal(data?.value);
     warehouseList = Array.isArray(list) ? list.map(w=>w.name||w).filter(Boolean) : [];
-  }catch(e){ pullErr=(e&&e.message)||String(e); warehouseList = []; }
+  }catch(e){ pullErr=(e&&e.message)||String(e); /* keep the last known list */ }
 }
 
 async function pullOne(m){
@@ -542,12 +543,6 @@ function renderViewBase(){
         <p class="text-sm text-slate-500">Workspace: ${escapeHtml(currentUser()?.companyName || 'Acacia ERP')}</p>
       </div>
       <div class="flex gap-2">
-        <select id="impWarehouse" onchange="window.__impWh=this.value" class="h-9 px-2 text-sm border border-slate-200 rounded-lg bg-white shadow-sm">
-          <option value="">Import into warehouse…</option>${(warehouseList.length?warehouseList:[...new Set(rows.map(r=>r.warehouse).filter(Boolean))]).map(w=>`<option value="${escapeHtml(w)}" ${window.__impWh===w?'selected':''}>${escapeHtml(w)}</option>`).join('')}
-        </select>
-        <button onclick="startStockImport()" class="px-3 py-2 text-sm border border-slate-200 rounded-lg bg-white shadow-sm hover:bg-slate-50 transition-all">Import</button>
-        <button onclick="downloadStockTemplate()" class="px-3 py-2 text-sm border border-slate-200 rounded-lg bg-white shadow-sm hover:bg-slate-50 transition-all">Template</button>
-        <input type="file" id="impFile" accept=".xlsx,.xls,.csv" class="hidden" onchange="importStockFile(event)">
         <button onclick="exportCsv()" class="px-3 py-2 text-sm border border-slate-200 rounded-lg bg-white shadow-sm hover:bg-slate-50 transition-all">Export CSV</button>
         <button onclick="addRow()" class="px-4 py-2 text-sm bg-acacia-600 hover:bg-acacia-700 text-white rounded-lg shadow-sm font-semibold transition-all">+ New Record</button>
       </div>
@@ -608,13 +603,6 @@ function renderStockView(){
         <p class="text-sm text-slate-500">Stock, live-synced with Acacia ERP's Inventory Hub</p>
       </div>
       <div class="flex gap-2">
-        <select id="impWarehouse" onchange="window.__impWh=this.value" class="h-9 px-2 text-sm border border-slate-200 rounded-lg bg-white shadow-sm">
-          <option value="">Warehouse (import / export)…</option>${(warehouseList.length?warehouseList:[...new Set(rows.map(r=>r.warehouse).filter(Boolean))]).map(w=>`<option value="${escapeHtml(w)}" ${window.__impWh===w?'selected':''}>${escapeHtml(w)}</option>`).join('')}
-        </select>
-        <button onclick="startStockImport()" class="px-3 py-2 text-sm border border-slate-200 rounded-lg bg-white shadow-sm hover:bg-slate-50 transition-all">Import Items</button>
-        <button onclick="downloadStockTemplate()" class="px-3 py-2 text-sm border border-slate-200 rounded-lg bg-white shadow-sm hover:bg-slate-50 transition-all">Template</button>
-        <input type="file" id="impFile" accept=".xlsx,.xls,.csv" class="hidden" onchange="importStockFile(event)">
-        <button onclick="exportStockForBooks()" class="px-3 py-2 text-sm border border-slate-200 rounded-lg bg-white shadow-sm hover:bg-slate-50 transition-all" title="Downloads the selected warehouse in the exact format of Books → Inventory → Import Inventory">Export for Books</button>
         <button onclick="exportCsv()" class="px-3 py-2 text-sm border border-slate-200 rounded-lg bg-white shadow-sm hover:bg-slate-50 transition-all">Export CSV</button>
         <button onclick="toggleStockForm()" class="px-4 py-2 text-sm bg-acacia-600 hover:bg-acacia-700 text-white rounded-lg shadow-sm font-semibold transition-all">+ Add Item</button>
       </div>
@@ -679,7 +667,7 @@ function renderStockView(){
               <td class="px-4 py-3 ${isLow?'text-amber-700 font-bold':'text-slate-700'}">${escapeHtml(cellText(r.qty))}${isLow?' ⚠️':''}</td>
               <td class="px-4 py-3 text-slate-500">${escapeHtml(cellText(r.buyPrice))}</td>
               <td class="px-4 py-3 text-slate-500">${escapeHtml(cellText(r.sellPrice))}</td>
-              <td class="px-4 py-3 acx-cell">${ACX_ACT({edit:`editStockItem(${i})`, clone:`cloneStockItem(${i})`, del:`delStockItem(${i})`, title:'Stock — '+(r.name||'')})}</td>
+              <td class="px-4 py-3 acx-cell">${ACX_ACT({edit:`editStockItem('${stockKeyOf(r)}')`, clone:`cloneStockItem('${stockKeyOf(r)}')`, del:`delStockItem('${stockKeyOf(r)}')`, title:'Stock — '+(r.name||'')})}</td>
             </tr>`; }).join('')}
           </tbody>
         </table>
@@ -687,6 +675,68 @@ function renderStockView(){
     </div>`;
 }
 function toggleStockForm(){ document.getElementById('stockFormCard')?.classList.toggle('hidden'); }
+/* ===== safe stock editing: items are found by SKU/name (never by list position), reads must succeed before any write,
+   and every write is conflict-checked against the row's updated_at so two devices can't overwrite each other ===== */
+const normK = v => String(v==null?'':v).trim().toLowerCase();
+function stockKeyOf(r){ return encodeURIComponent((r.warehouse||'')+'\u0001'+(r.sku||'')+'\u0001'+(r.name||'')).replace(/'/g,'%27'); }
+function stockRowByKey(k){
+  let parts; try{ parts=decodeURIComponent(k).split('\u0001'); }catch(e){ return null; }
+  return (store.stock||[]).find(r=>r && (r.warehouse||'')===parts[0] && (r.sku||'')===parts[1] && (r.name||'')===parts[2]) || null;
+}
+async function readWhRow(w){
+  const { data, error } = await sb.from('company_state').select('value,updated_at').eq('company_id',currentCompanyId()).eq('key','inventory_'+w).maybeSingle();
+  if(error) throw new Error('Could not read warehouse "'+w+'" from the cloud ('+error.message+'). Nothing was changed.');
+  if(!data) return { exists:false, items:[], updated_at:null };
+  let v=data.value;
+  if(v==null) return { exists:true, items:[], updated_at:data.updated_at };
+  if(typeof v==='string'){ try{ v=JSON.parse(v); }catch(e){ throw new Error('Warehouse "'+w+'" data could not be read. Nothing was changed.'); } }
+  if(!Array.isArray(v)) throw new Error('Warehouse "'+w+'" data is not in the expected format. Nothing was changed.');
+  return { exists:true, items:v, updated_at:data.updated_at };
+}
+async function writeWhCas(w, items, row){
+  const c=currentCompanyId(), key='inventory_'+w, now=new Date().toISOString(), val=JSON.stringify(items);
+  if(!row.exists){
+    const { error } = await sb.from('company_state').insert({ company_id:c, key, value:val, updated_at:now });
+    if(error){ if(error.code==='23505') return 'conflict'; throw new Error('Save failed: '+error.message); }
+    return 'ok';
+  }
+  let q = sb.from('company_state').update({ value:val, updated_at:now }).eq('company_id',c).eq('key',key);
+  q = row.updated_at ? q.eq('updated_at',row.updated_at) : q.is('updated_at',null);
+  const { data, error } = await q.select('key');
+  if(error) throw new Error('Save failed: '+error.message);
+  return (data && data.length) ? 'ok' : 'conflict';
+}
+/* read -> change -> write; if someone else changed the warehouse in between, re-read and redo (up to 4 times) */
+async function mutateWh(w, fn){
+  for(let a=0;a<4;a++){
+    const row = await readWhRow(w);
+    const res = fn(row.items);
+    if(res===false) return false;
+    if(await writeWhCas(w,row.items,row)==='ok') return true;
+  }
+  throw new Error('Another device keeps changing "'+w+'". Please try again in a moment.');
+}
+function findStockIdx(items,row){
+  const sk=normK(row.sku);
+  if(sk){ return items.findIndex(x=>x && normK(x.sku)===sk); }
+  const nm=normK(row.name);
+  const same=[]; items.forEach((x,i)=>{ if(x && !normK(x.sku) && normK(x.name)===nm) same.push(i); });
+  if(same.length===1) return same[0];
+  const exact=same.filter(i=>Number(items[i].qty)===Number(row.qty) && Number(items[i].buyPrice||0)===Number(row.buyPrice||0) && Number(items[i].sellPrice||0)===Number(row.sellPrice||0));
+  return exact.length===1 ? exact[0] : -1;
+}
+async function stockOp(row, fn){
+  setSync('saving…','busy');
+  try{
+    const done = await mutateWh(row.warehouse, items=>{
+      const idx=findStockIdx(items,row);
+      if(idx<0){ alert('That item was changed or removed elsewhere. The list has been refreshed — please try again.'); return false; }
+      return fn(items, idx);
+    });
+    setSync(done?'synced · '+(currentUser()?.companyName||'workspace'):'synced', 'ok');
+  }catch(e){ console.warn(e); setSync('save error','err'); alert(e.message||String(e)); }
+  await pullStock(); renderStockView();
+}
 async function saveStockItem(){
   const warehouse = sfWarehouse.value;
   if(!warehouse){ alert('Select a warehouse.'); return; }
@@ -694,35 +744,22 @@ async function saveStockItem(){
   const qty = parseFloat(sfQty.value);
   if(!name || isNaN(qty)){ alert('Item name and quantity are required.'); return; }
   const item = { name, sku: sfSku.value.trim(), qty, buyPrice: parseFloat(sfBuy.value)||0, sellPrice: parseFloat(sfSell.value)||0, active:true, history:[] };
-
   setSync('saving…','busy');
-  const key='inventory_'+warehouse;
-  let existing=[];
   try{
-    const c=currentCompanyId();
-    const { data } = await sb.from('company_state').select('value').eq('company_id',c).eq('key',key).maybeSingle();
-    existing = parseVal(data?.value); if(!Array.isArray(existing)) existing=[];
-  }catch(e){}
-  existing.push(item);
-  if(await pushStockFor(warehouse, existing)){
+    const done = await mutateWh(warehouse, items=>{
+      if(normK(item.sku) && items.some(x=>x && normK(x.sku)===normK(item.sku))){ alert('An item with SKU "'+item.sku+'" already exists in '+warehouse+'. Edit that item instead.'); return false; }
+      items.push(item);
+    });
+    if(!done){ setSync('synced','ok'); return; }
     setSync('synced · '+(currentUser()?.companyName||'workspace'),'ok');
     await pullStock(); toggleStockForm(); renderStockView();
-  }
+  }catch(e){ console.warn(e); setSync('save error','err'); alert(e.message||String(e)); }
 }
-async function delStockItem(i){
-  if(!confirm('Delete this stock item from Acacia ERP?')) return;
-  const row = store.stock[i];
-  const loc = stockKeys[i];
-  if(!loc){ await pullStock(); renderStockView(); return; }
-  setSync('saving…','busy');
-  const c=currentCompanyId();
-  try{
-    const { data } = await sb.from('company_state').select('value').eq('company_id',c).eq('key',loc.key).maybeSingle();
-    let items = parseVal(data?.value); if(!Array.isArray(items)) items=[];
-    items.splice(loc.index,1);
-    await pushStockFor(row.warehouse, items);
-  }catch(e){ console.warn(e); }
-  await pullStock(); renderStockView();
+async function delStockItem(k){
+  const row = stockRowByKey(k);
+  if(!row){ await pullStock(); renderStockView(); return; }
+  if(!confirm('Delete "'+(row.name||'this item')+'" from '+row.warehouse+'?')) return;
+  await stockOp(row, (items, idx)=>{ items.splice(idx,1); });
 }
 
 async function addRow(){
@@ -759,34 +796,24 @@ async function cloneRow(i){
   store[m.id] = [...store[m.id], copy];
   if(await pushOne(m)) renderView(); else await pullOne(m).then(renderView);
 }
-async function stockMutate(i, fn){
-  const row = store.stock[i], loc = stockKeys[i];
-  if(!row || !loc){ await pullStock(); renderStockView(); return; }
-  setSync('saving…','busy');
-  try{
-    const { data } = await sb.from('company_state').select('value').eq('company_id',currentCompanyId()).eq('key',loc.key).maybeSingle();
-    let items = parseVal(data?.value); if(!Array.isArray(items)) items=[];
-    if(fn(items, loc.index)===false){ setSync('synced','ok'); return; }
-    if(await pushStockFor(row.warehouse, items)) setSync('synced · '+(currentUser()?.companyName||'workspace'),'ok');
-  }catch(e){ console.warn(e); }
-  await pullStock(); renderStockView();
-}
-async function editStockItem(i){
-  const r = store.stock[i]; if(!r) return;
+async function editStockItem(k){
+  const r = stockRowByKey(k); if(!r) { await pullStock(); renderStockView(); return; }
   const name = prompt('Item name:', r.name||''); if(name===null) return;
   const sku = prompt('SKU / Code:', r.sku||''); if(sku===null) return;
   const qty = prompt('Quantity:', r.qty??0); if(qty===null) return;
   const buy = prompt('Buy price:', r.buyPrice??0); if(buy===null) return;
   const sell = prompt('Sell price:', r.sellPrice??0); if(sell===null) return;
   if(!name.trim() || isNaN(parseFloat(qty))){ alert('Item name and quantity are required.'); return; }
-  await stockMutate(i, (items, idx) => {
-    if(!items[idx]) return false;
+  await stockOp(r, (items, idx) => {
+    const nsku=normK(sku);
+    if(nsku && items.some((x,i)=>i!==idx && x && normK(x.sku)===nsku)){ alert('Another item in '+r.warehouse+' already uses SKU "'+sku.trim()+'".'); return false; }
     items[idx] = Object.assign({}, items[idx], { name:name.trim(), sku:sku.trim(), qty:parseFloat(qty), buyPrice:parseFloat(buy)||0, sellPrice:parseFloat(sell)||0 });
   });
 }
-async function cloneStockItem(i){
-  await stockMutate(i, (items, idx) => {
-    const src = items[idx]; if(!src) return false;
+async function cloneStockItem(k){
+  const r = stockRowByKey(k); if(!r) { await pullStock(); renderStockView(); return; }
+  await stockOp(r, (items, idx) => {
+    const src = items[idx];
     const copy = JSON.parse(JSON.stringify(src));
     copy.name = (src.name||'Item')+' (copy)'; if(copy.sku) copy.sku += '-COPY'; copy.history = [];
     items.push(copy);
@@ -914,8 +941,8 @@ function opFormHTML(id){
 }
 const gv=id=>document.getElementById(id).value;
 async function loadWh(w){
-  const { data } = await sb.from('company_state').select('value').eq('company_id',currentCompanyId()).eq('key','inventory_'+w).maybeSingle();
-  const a=parseVal(data?.value); return Array.isArray(a)?a:[];
+  try{ return (await readWhRow(w)).items; }
+  catch(e){ alert(e.message||String(e)); throw e; }
 }
 const findIt=(items,k)=>items.find(x=>x.sku===k||x.name===k);
 async function logRow(modId,rec,unshift){
@@ -1035,157 +1062,7 @@ boot();
     }catch(e){ console.warn('stock refresh failed', e); }
     finally{ busy=false; }
   }
-  setInterval(refreshStock, 8000);
+  setInterval(refreshStock, 20000);
   document.addEventListener('visibilitychange', function(){ if(!document.hidden) refreshStock(); });
   window.addEventListener('focus', refreshStock);
 })();
-
-
-/* ================= Stock import (same file format + behaviour as Acacia Books → Inventory → Import Inventory) =================
-   Pick a warehouse, pick a .xlsx/.xls/.csv. The rows REPLACE that warehouse's stock (exactly like Books).
-   Columns: name, sku, qty, buyPrice, sellPrice, buyVat, sellVat, buyingAccount, sellingAccount, sellDescription
-   (also understands Item Name / Quantity / Buying Price / Selling Price etc.). */
-const STOCK_ALIASES = {
-  name:['name','itemname','item','product','productname'],
-  sku:['sku','code','skucode','itemcode','productcode','barcode'],
-  qty:['qty','quantity','stock','onhand','qtyonhand','stockonhand'],
-  buyPrice:['buyprice','buyingprice','cost','costprice','purchaseprice','buyingpriceperunit'],
-  sellPrice:['sellprice','sellingprice','price','saleprice','unitprice','sellingpriceperunit'],
-  buyVat:['buyvat','buyvatrule','purchasevat'],
-  sellVat:['sellvat','sellvatrule','salesvat'],
-  buyingAccount:['buyingaccount','purchaseaccount'],
-  sellingAccount:['sellingaccount','salesaccount','incomeaccount'],
-  sellDescription:['selldescription','description','salesdescription'],
-  active:['active','status']
-};
-function __stockNum(v){ if(typeof v==='number') return isFinite(v)?v:0; const n=parseFloat(String(v==null?'':v).replace(/[^0-9.\-]/g,'')); return isNaN(n)?0:n; }
-function __stockKey(h){ return String(h).toLowerCase().replace(/[^a-z0-9]/g,''); }
-/* Map any header spelling onto the canonical Books fields; unknown columns are kept as-is (like Books does). */
-function stockView(raw){
-  if(!raw || typeof raw!=='object') return raw;
-  const out = Object.assign({}, raw), have = {};
-  Object.keys(raw).forEach(k=>{ have[__stockKey(k)] = k; });
-  Object.keys(STOCK_ALIASES).forEach(canon=>{
-    if(raw[canon]!==undefined && raw[canon]!=='') return;
-    for(const a of STOCK_ALIASES[canon]){ if(have[a]!==undefined && raw[have[a]]!==undefined && raw[have[a]]!==''){ out[canon]=raw[have[a]]; break; } }
-  });
-  ['qty','buyPrice','sellPrice'].forEach(k=>{ if(out[k]!==undefined) out[k]=__stockNum(out[k]); });
-  return out;
-}
-function __stockId(){ return 'itm_'+Date.now().toString(36)+Math.random().toString(36).slice(2,8); }
-function normStockRow(raw, prev){
-  const t = stockView(raw);
-  const name = String(t.name==null?'':t.name).trim();
-  if(!name) return null;
-  const act = t.active;
-  const active = (act===undefined||act==='') ? (prev && prev.active!==undefined ? prev.active : true)
-                 : !(act===false || /^(false|no|inactive|0)$/i.test(String(act).trim()));
-  const item = Object.assign({}, t, {
-    name, sku:String(t.sku==null?'':t.sku).trim(),
-    qty:__stockNum(t.qty), buyPrice:__stockNum(t.buyPrice), sellPrice:__stockNum(t.sellPrice),
-    active, history: (prev&&Array.isArray(prev.history))?prev.history:(Array.isArray(t.history)?t.history:[])
-  });
-  ['buyVat','sellVat','buyingAccount','sellingAccount','sellDescription'].forEach(k=>{
-    if((item[k]===undefined||item[k]==='') && prev && prev[k]!==undefined) item[k]=prev[k];
-  });
-  item.id = (prev && prev.id) || t.id || __stockId();   // stable id so Books/Inventory merges never duplicate the row
-  return item;
-}
-function __stockParseCSV(txt){
-  txt=String(txt||'').replace(/^\uFEFF/,''); const rows=[]; let row=[],cur='',q=false;
-  for(let i=0;i<txt.length;i++){ const c=txt[i];
-    if(q){ if(c==='"'){ if(txt[i+1]==='"'){cur+='"';i++;} else q=false; } else cur+=c; }
-    else if(c==='"') q=true; else if(c===',') {row.push(cur);cur='';} else if(c==='\n'){row.push(cur);rows.push(row);row=[];cur='';} else if(c!=='\r') cur+=c; }
-  if(cur.length||row.length){ row.push(cur); rows.push(row); }
-  const f=rows.filter(r=>r.some(x=>String(x).trim()!==''));
-  if(!f.length) return [];
-  const head=f[0].map(x=>String(x).trim());
-  return f.slice(1).map(r=>{ const o={}; head.forEach((h,i)=>{ o[h]=r[i]!==undefined?String(r[i]).trim():''; }); return o; });
-}
-function __ensureXLSX(ok, fail){
-  const works=()=>!!(window.XLSX && typeof XLSX.read==='function' && XLSX.utils);
-  if(works()) return ok();
-  const urls=['https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js','https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js','https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js'];
-  let i=0;
-  (function next(){
-    if(works()) return ok();
-    if(i>=urls.length) return fail(new Error('The Excel library could not be loaded. Check your internet connection, or save the file as .csv (CSV needs no library).'));
-    const sc=document.createElement('script'); sc.src=urls[i++]; sc.onload=()=>works()?ok():next(); sc.onerror=next; document.head.appendChild(sc);
-  })();
-}
-function startStockImport(){
-  const wh=(document.getElementById('impWarehouse')||{}).value;
-  if(!wh){ alert('Please select a warehouse first.'); return; }
-  window.__impWh=wh;
-  document.getElementById('impFile').click();
-}
-/* Export a warehouse in the same columns as Books -> Inventory export, so it imports straight into Books (Import Inventory). */
-function exportStockForBooks(){
-  const wh=(document.getElementById('impWarehouse')||{}).value||window.__impWh;
-  if(!wh){ alert('Select a warehouse first - Books imports one warehouse at a time.'); return; }
-  const rows=(store.stock||[]).filter(r=>r.warehouse===wh);
-  if(!rows.length){ alert('There are no items in "'+wh+'" to export.'); return; }
-  const head=['Name','SKU','Quantity','Buying Price','Selling Price','Buying VAT Rule','Selling VAT Rule','Buying Account Code','Selling Account Code','Description','Active'];
-  const matrix=rows.map(r=>[r.name||'',r.sku||'',r.qty==null?0:r.qty,r.buyPrice==null?0:r.buyPrice,r.sellPrice==null?0:r.sellPrice,
-    r.buyVat||'',r.sellVat||'',r.buyingAccount||'',r.sellingAccount||'',r.sellDescription||'',r.active===false?'No':'Yes']);
-  const base=String(wh).replace(/[^a-z0-9]+/gi,'_')+'_Inventory_'+new Date().toISOString().slice(0,10);
-  const asCsv=()=>{
-    const q=v=>'"'+String(v==null?'':v).replace(/"/g,'""')+'"';
-    const csv='\ufeff'+[head,...matrix].map(l=>l.map(q).join(',')).join('\r\n');
-    const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'})); a.download=base+'.csv';
-    document.body.appendChild(a); a.click(); setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove();},500);
-  };
-  try{
-    __ensureXLSX(()=>{
-      try{ const ws=XLSX.utils.aoa_to_sheet([head,...matrix]), wb=XLSX.utils.book_new();
-        XLSX.utils.book_append_sheet(wb,ws,String(wh).slice(0,31)); XLSX.writeFile(wb,base+'.xlsx'); }
-      catch(e){ asCsv(); }
-    }, asCsv);
-  }catch(e){ asCsv(); }
-}
-function downloadStockTemplate(){
-  const csv='name,sku,qty,buyPrice,sellPrice,buyVat,sellVat,buyingAccount,sellingAccount,sellDescription\r\nSample Item,SKU-001,10,100,150,,,,,\r\n';
-  const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'})); a.download='Inventory_Import_Template.csv';
-  document.body.appendChild(a); a.click(); setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove();},500);
-}
-async function importStockFile(ev){
-  const input=ev.target, file=input.files&&input.files[0];
-  const wh=(document.getElementById('impWarehouse')||{}).value||window.__impWh;
-  input.value='';
-  if(!file) return;
-  if(!wh){ alert('Please select a warehouse first.'); return; }
-  const isCsv=/\.csv$/i.test(file.name);
-  if(!isCsv && !/\.(xlsx|xls|xlsm)$/i.test(file.name)){ alert('Please choose a .xlsx, .xls or .csv file.'); return; }
-  const finish=async function(rows){
-    try{
-      if(!Array.isArray(rows)||!rows.length){ alert('No rows found. The first sheet needs a header row followed by data rows.'); return; }
-      setSync('importing…','busy');
-      const key='inventory_'+wh, c=currentCompanyId();
-      let existing=[];
-      try{ const { data } = await sb.from('company_state').select('value').eq('company_id',c).eq('key',key).maybeSingle(); existing=parseVal(data?.value); if(!Array.isArray(existing)) existing=[]; }catch(e){}
-      const byKey={}; existing.forEach(it=>{ if(!it) return; const k=String(it.sku||it.name||'').trim().toLowerCase(); if(k) byKey[k]=it; });
-      let skipped=0;
-      const items=rows.map(r=>{
-        const clean={}; Object.keys(r).forEach(k=>{ const v=r[k]; clean[String(k).trim()]=(typeof v==='string')?v.trim():v; });
-        const t=stockView(clean); const k=String(t.sku||t.name||'').trim().toLowerCase();
-        const it=normStockRow(clean, byKey[k]); if(!it) skipped++; return it;
-      }).filter(Boolean);
-      if(!items.length){ setSync('synced','ok'); alert('No valid rows: every row needs an item name.'); return; }
-      if(!confirm(`Import ${items.length} item(s) into "${wh}"?\n\nThis REPLACES the ${existing.length} item(s) currently in that warehouse (same as Books).`+(skipped?`\n${skipped} row(s) without a name will be skipped.`:''))){ setSync('synced · '+(currentUser()?.companyName||'workspace'),'ok'); return; }
-      if(await pushStockFor(wh, items)){
-        setSync('synced · '+(currentUser()?.companyName||'workspace'),'ok');
-        await pullWarehouses(); await pullStock(); renderView();
-        alert(`✅ Imported ${items.length} item(s) successfully!`);
-      }
-    }catch(e){ console.error(e); setSync('import error','err'); alert('❌ Import failed: '+(e&&e.message?e.message:e)); }
-  };
-  const fr=new FileReader();
-  fr.onerror=()=>alert('Could not read that file. Please try again.');
-  if(isCsv){ fr.onload=e=>finish(__stockParseCSV(e.target.result)); fr.readAsText(file); return; }
-  fr.onload=e=>__ensureXLSX(()=>{
-    try{ const wb=XLSX.read(new Uint8Array(e.target.result),{type:'array'}); if(!wb.SheetNames.length) throw new Error('The file has no readable sheets.');
-         finish(XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{defval:'',raw:true})); }
-    catch(err){ alert('❌ Error reading Excel file: '+err.message); }
-  }, err=>alert('❌ '+err.message));
-  fr.readAsArrayBuffer(file);
-}
