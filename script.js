@@ -743,7 +743,7 @@ async function saveStockItem(){
   const name = sfName.value.trim();
   const qty = parseFloat(sfQty.value);
   if(!name || isNaN(qty)){ alert('Item name and quantity are required.'); return; }
-  const item = { name, sku: sfSku.value.trim(), qty, buyPrice: parseFloat(sfBuy.value)||0, sellPrice: parseFloat(sfSell.value)||0, active:true, history:[] };
+  const item = { id:'itm-'+Date.now().toString(36)+Math.random().toString(36).slice(2,8), name, sku: sfSku.value.trim(), qty, buyPrice: parseFloat(sfBuy.value)||0, sellPrice: parseFloat(sfSell.value)||0, active:true, history:[] };
   setSync('saving…','busy');
   try{
     const done = await mutateWh(warehouse, items=>{
@@ -815,7 +815,7 @@ async function cloneStockItem(k){
   await stockOp(r, (items, idx) => {
     const src = items[idx];
     const copy = JSON.parse(JSON.stringify(src));
-    copy.name = (src.name||'Item')+' (copy)'; if(copy.sku) copy.sku += '-COPY'; copy.history = [];
+    copy.name = (src.name||'Item')+' (copy)'; if(copy.sku) copy.sku += '-COPY'; copy.history = []; copy.id = 'itm-'+Date.now().toString(36)+Math.random().toString(36).slice(2,8);
     items.push(copy);
   });
 }
