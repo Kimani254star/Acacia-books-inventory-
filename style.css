@@ -1,6 +1,6 @@
-html,body{height:100%}body{font-family:'Cambria',system-ui,sans-serif;background:#f4f6fa}
+html,body{height:100%}body{font-family:'Cambria',system-ui,sans-serif;background:#F1EFE5}
   ::-webkit-scrollbar{width:8px;height:8px}::-webkit-scrollbar-thumb{background:#c7d0dc;border-radius:6px}
-  .nav-btn.active{background:#0d4ca8;color:#fff}
+  .nav-btn.active{background:#1E4238;color:#fff}
   .fade-in{animation:fadeIn .2s ease-out}@keyframes fadeIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
 
 /* ==== Home page (Books-style) ======================================= */
@@ -289,3 +289,22 @@ html[data-theme="dark"] #homePage .hp-mi{background:rgba(255,255,255,.06);}
 .auth-back{font-size:12px;color:#64748b;cursor:pointer;margin-bottom:14px;align-self:flex-start;display:inline-block}
 .auth-back:hover{color:#2563eb;text-decoration:underline}
 
+
+/* ==== Acacia CRM look (forest sidebar, paper background, gold accent) - same as Acacia CRM ==== */
+:root{--forest:#16302A;--forest-2:#1E4238;--forest-3:#295A4C;--paper:#F1EFE5;--paper-2:#E8E5D8;--card:#FFFEFA;--ink:#1C1B16;--ink-soft:#5B5A4E;--line:#DCD7C6;--gold:#B98A2E}
+html[data-theme="dark"]{--paper:#141F1A;--paper-2:#1B2822;--card:#1E2B25;--ink:#EDEAD9;--ink-soft:#A9AF9E;--line:#33453C;--gold:#D9A441;color-scheme:dark}
+html,body{background:var(--paper)!important}
+body{font-family:'Cambria',Georgia,'Times New Roman',serif!important;color:var(--ink)!important}
+aside.w-60{background:var(--forest)!important;color:#D6D2C0!important;border-color:rgba(255,255,255,.08)!important}
+aside.w-60 .text-slate-400{color:#7E9689!important}
+aside.w-60 .nav-btn{color:#D6D2C0!important;border-radius:0!important;border-left:3px solid transparent}
+aside.w-60 .nav-btn:hover{background:rgba(255,255,255,.05)!important}
+aside.w-60 .nav-btn.active{background:rgba(255,255,255,.08)!important;border-left-color:var(--gold);color:#F7EFD8!important;font-weight:600}
+.bg-white{background-color:var(--card)!important}
+.bg-slate-50,.bg-slate-100,.bg-gray-50,.bg-gray-100{background-color:var(--paper-2)!important}
+.hover\:bg-slate-50:hover,.hover\:bg-slate-100:hover{background-color:var(--paper-2)!important}
+.border-slate-100,.border-slate-200,.border-slate-300,.border-gray-100,.border-gray-200,.border-gray-300{border-color:var(--line)!important}
+.text-slate-700,.text-slate-800,.text-slate-900,.text-gray-700,.text-gray-800,.text-gray-900{color:var(--ink)!important}
+.text-slate-500,.text-slate-600,.text-gray-500,.text-gray-600{color:var(--ink-soft)!important}
+html[data-theme="dark"] input,html[data-theme="dark"] select,html[data-theme="dark"] textarea{background-color:var(--paper-2)!important;color:var(--ink)!important;border-color:#3F5348!important}
+html[data-theme="dark"] table thead,html[data-theme="dark"] th{background-color:var(--paper-2)!important}
