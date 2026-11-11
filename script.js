@@ -158,6 +158,29 @@ function hpShowLogin(tab){
 
   async function signIn(email, pass, company) {
     email = low(email);
+    /* passwords are checked inside Postgres (acx_login); the browser never sees a hash */
+    var rows;
+    try { rows = await rpc('acx_login', { p_email: email, p_password: pass, p_company: company || null }); }
+    catch (e) { if (e.code === 'missing') return signInLegacy(email, pass, company); throw e; }   /* acx_login not installed yet: remove this line once step2_secure_login.sql is run */
+    if (!Array.isArray(rows) || !rows.length) return null;
+    return finishSignIn(rows, email);
+  }
+
+  async function finishSignIn(ok, email) {
+    var row = ok[0];
+    if (ok.length > 1) {
+      var pick = w.prompt('This login belongs to more than one company:\n' + ok.map(function (x, n) { return (n + 1) + '. ' + ((x.data && x.data.companyName) || x.company_id) + ' (' + x.company_id + ')'; }).join('\n') + '\n\nType the number to open:', '1');
+      row = ok[(parseInt(pick, 10) || 1) - 1] || ok[0];
+    }
+    var msg = await gate(row.company_id, email); if (msg) throw err('blocked', msg);
+    try { if (row.session && w.AcxSession) w.AcxSession.add(row.session); } catch (e) {}   /* session token for row-level security */
+    var d = row.data || {};
+    return { companyId: row.company_id, company: d.companyName || '', name: d.fullName || d.username || email.split('@')[0], email: email, role: mapRole(d.role, d) };
+  }
+
+  /* OLD path (reads the hash into the browser). Only used until acx_login exists. */
+  async function signInLegacy(email, pass, company) {
+    email = low(email);
     var r = await req('app_accounts?select=login_id,username,company_id,data&login_id=eq.' + enc(email));
     if (!r.ok) throw err('offline', 'Could not read accounts (' + r.status + '). Run acacia_apps_cloud.sql in Supabase.');
     var rows = await r.json(), ok = [], cn = low(company);
@@ -196,6 +219,7 @@ function hpShowLogin(tab){
     try {
       var list = JSON.parse(localStorage.getItem(usersKey) || '[]');
       var rec = { companyId: u.companyId, company: u.company, name: u.name, email: low(u.email), role: u.role, passwordHash: u.passwordHash, passwordSalt: u.passwordSalt };
+      Object.keys(rec).forEach(function (k) { if (rec[k] === undefined) delete rec[k]; });
       var i = list.findIndex(function (x) { return low(x.email) === rec.email && x.companyId === rec.companyId; });
       if (i > -1) { list[i] = Object.assign({}, list[i], rec); delete list[i].password; } else list.push(rec);
       rawSet.call(localStorage, usersKey, JSON.stringify(list));
@@ -502,7 +526,7 @@ async function pushOne(m){
 }
 
 function renderNav(){
-  navList.innerHTML = MODULES.map(m=>`<button onclick="go('${m.id}')" class="nav-btn w-full text-left px-3 py-2 rounded-lg hover:bg-slate-100 ${m.id===active?'active':''}">${m.label}</button>`).join('')
+  navList.innerHTML = MODULES.map(m=>`<button onclick="go('${m.id}')" class="nav-btn w-full text-left px-3 py-2 rounded-lg hover:bg-slate-100 ${m.id===active?'active':''}">${escapeHtml(m.label)}</button>`).join('')
     + `<div class="text-[10px] font-bold uppercase text-slate-400 px-2 pt-4 pb-1">Settings</div><button onclick="go('appearance')" class="nav-btn w-full text-left px-3 py-2 rounded-lg hover:bg-slate-100 ${active==='appearance'?'active':''}">🎨 Appearance</button>`;
 }
 function go(id){ active=id; renderNav(); renderView(); }
@@ -551,7 +575,7 @@ function renderViewBase(){
     <!-- Dashboard Style Summary Cards -->
     <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
       <div class="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex flex-col justify-between">
-        <span class="text-sm font-semibold text-slate-500 uppercase tracking-wider">${m.label} Overview</span>
+        <span class="text-sm font-semibold text-slate-500 uppercase tracking-wider">${escapeHtml(m.label)} Overview</span>
         <span class="text-2xl font-bold text-slate-800 mt-2">${rows.length} Active Item${rows.length===1?'':'s'}</span>
       </div>
       <div class="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex flex-col justify-between">
@@ -567,7 +591,7 @@ function renderViewBase(){
     <!-- Data Table -->
     <div class="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
       <div class="p-4 border-b border-slate-100 bg-slate-50/50 flex items-center justify-between">
-        <h3 class="font-bold text-slate-700 text-sm tracking-wide uppercase">${m.label}</h3>
+        <h3 class="font-bold text-slate-700 text-sm tracking-wide uppercase">${escapeHtml(m.label)}</h3>
       </div>
       <div class="overflow-x-auto">
         <table class="w-full text-sm">
