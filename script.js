@@ -129,7 +129,7 @@ function hpShowLogin(tab){
 
   /* deleted / suspended companies are blocked (fails open if the cloud can't be reached) */
   async function gate(cid, login) {
-    try { if (/^(deleted|deactivated)$/.test(String(await rpc('acx_account_state', { p_company: low(cid), p_login: low(login) })))) return 'This company account has been deactivated or removed. Contact Acacia support.'; } catch (e) {}
+    try { if ((await rpc('acx_account_state', { p_company: low(cid), p_login: low(login) })) === 'deleted') return 'This account was removed by Acacia support.'; } catch (e) {}
     try {
       var r = await req('acacia_company_status?select=status&company_id=eq.' + enc(cid));
       if (r.ok) { var j = await r.json(); var s = j[0] && j[0].status; if (s === 'pending') return 'Your company is waiting for approval by Acacia support. You will be able to sign in as soon as it is approved.'; if (s && s !== 'active') return 'Your company account is "' + s + '". Please contact Acacia support.'; }
@@ -158,29 +158,6 @@ function hpShowLogin(tab){
 
   async function signIn(email, pass, company) {
     email = low(email);
-    /* passwords are checked inside Postgres (acx_login); the browser never sees a hash */
-    var rows;
-    try { rows = await rpc('acx_login', { p_email: email, p_password: pass, p_company: company || null }); }
-    catch (e) { if (e.code === 'missing') return signInLegacy(email, pass, company); throw e; }   /* acx_login not installed yet: remove this line once step2_secure_login.sql is run */
-    if (!Array.isArray(rows) || !rows.length) return null;
-    return finishSignIn(rows, email);
-  }
-
-  async function finishSignIn(ok, email) {
-    var row = ok[0];
-    if (ok.length > 1) {
-      var pick = w.prompt('This login belongs to more than one company:\n' + ok.map(function (x, n) { return (n + 1) + '. ' + ((x.data && x.data.companyName) || x.company_id) + ' (' + x.company_id + ')'; }).join('\n') + '\n\nType the number to open:', '1');
-      row = ok[(parseInt(pick, 10) || 1) - 1] || ok[0];
-    }
-    var msg = await gate(row.company_id, email); if (msg) throw err('blocked', msg);
-    try { if (row.session && w.AcxSession) w.AcxSession.add(row.session); } catch (e) {}   /* session token for row-level security */
-    var d = row.data || {};
-    return { companyId: row.company_id, company: d.companyName || '', name: d.fullName || d.username || email.split('@')[0], email: email, role: mapRole(d.role, d) };
-  }
-
-  /* OLD path (reads the hash into the browser). Only used until acx_login exists. */
-  async function signInLegacy(email, pass, company) {
-    email = low(email);
     var r = await req('app_accounts?select=login_id,username,company_id,data&login_id=eq.' + enc(email));
     if (!r.ok) throw err('offline', 'Could not read accounts (' + r.status + '). Run acacia_apps_cloud.sql in Supabase.');
     var rows = await r.json(), ok = [], cn = low(company);
@@ -193,6 +170,7 @@ function hpShowLogin(tab){
       row = ok[(parseInt(pick, 10) || 1) - 1] || ok[0];
     }
     var msg = await gate(row.company_id, email); if (msg) throw err('blocked', msg);
+    try { if (w.AcxSession) await w.AcxSession.start(email, pass, row.company_id); } catch (e) {}
     var d = row.data || {};
     return { companyId: row.company_id, company: d.companyName || '', name: d.fullName || d.username || email.split('@')[0], email: email, role: mapRole(d.role, d), passwordHash: d.passwordHash, passwordSalt: d.passwordSalt };
   }
@@ -200,6 +178,7 @@ function hpShowLogin(tab){
   async function register(o) {
     var salt = newSalt(), h = await hash(o.password, salt);
     var id = await rpc('acx_register_company', { p_company: o.company, p_name: o.name, p_email: low(o.email), p_hash: h, p_salt: salt, p_app: cfg.app, p_plan: o.plan || '', p_billing: o.billing || 'monthly' });
+    try { if (w.AcxSession) await w.AcxSession.start(o.email, o.password, id); } catch (e) {}
     var blocked = await gate(id, o.email);
     return { companyId: id, passwordHash: h, passwordSalt: salt, blocked: blocked };
   }
@@ -219,7 +198,6 @@ function hpShowLogin(tab){
     try {
       var list = JSON.parse(localStorage.getItem(usersKey) || '[]');
       var rec = { companyId: u.companyId, company: u.company, name: u.name, email: low(u.email), role: u.role, passwordHash: u.passwordHash, passwordSalt: u.passwordSalt };
-      Object.keys(rec).forEach(function (k) { if (rec[k] === undefined) delete rec[k]; });
       var i = list.findIndex(function (x) { return low(x.email) === rec.email && x.companyId === rec.companyId; });
       if (i > -1) { list[i] = Object.assign({}, list[i], rec); delete list[i].password; } else list.push(rec);
       rawSet.call(localStorage, usersKey, JSON.stringify(list));
@@ -466,13 +444,23 @@ async function pullStock(){
     store.stock = rows;
   }catch(e){ console.warn('pullStock failed', e); pullErr=(e&&e.message)||String(e); if(!Array.isArray(store.stock)) store.stock = []; /* keep what we already had */ }
 }
+const whVer = {};  // warehouse -> { exists, updated_at } as last read by readWhRow()
+/* Saves one warehouse list, but only if nobody (Books, another device) changed it since it was read.
+   Same rule Books uses for every module, so the two apps cannot overwrite each other. */
 async function pushStockFor(warehouse, items){
-  const c=currentCompanyId();
-  const { error } = await sb.from('company_state').upsert(
-    { company_id: c, key: 'inventory_'+warehouse, value: JSON.stringify(items), updated_at: new Date().toISOString() },
-    { onConflict: 'company_id,key' }
-  );
-  if(error){ setSync('save error','err'); alert('Save failed: '+error.message); return false; }
+  const row = whVer[warehouse];
+  if(!row){ alert('Please reload "'+warehouse+'" and try again.'); return false; }
+  let res;
+  try{ res = await writeWhCas(warehouse, items, row); }
+  catch(e){ setSync('save error','err'); alert(e.message||String(e)); return false; }
+  if(res==='conflict'){
+    delete whVer[warehouse];
+    setSync('save error','err');
+    alert('"'+warehouse+'" was changed on another device (for example in Books) while you were working. Nothing was saved. The list has been refreshed — please repeat the action.');
+    await pullStock(); try{ renderView(); }catch(e){}
+    return false;
+  }
+  delete whVer[warehouse];
   return true;
 }
 async function pullWarehouses(){
@@ -526,7 +514,7 @@ async function pushOne(m){
 }
 
 function renderNav(){
-  navList.innerHTML = MODULES.map(m=>`<button onclick="go('${m.id}')" class="nav-btn w-full text-left px-3 py-2 rounded-lg hover:bg-slate-100 ${m.id===active?'active':''}">${escapeHtml(m.label)}</button>`).join('')
+  navList.innerHTML = MODULES.map(m=>`<button onclick="go('${m.id}')" class="nav-btn w-full text-left px-3 py-2 rounded-lg hover:bg-slate-100 ${m.id===active?'active':''}">${m.label}</button>`).join('')
     + `<div class="text-[10px] font-bold uppercase text-slate-400 px-2 pt-4 pb-1">Settings</div><button onclick="go('appearance')" class="nav-btn w-full text-left px-3 py-2 rounded-lg hover:bg-slate-100 ${active==='appearance'?'active':''}">🎨 Appearance</button>`;
 }
 function go(id){ active=id; renderNav(); renderView(); }
@@ -575,7 +563,7 @@ function renderViewBase(){
     <!-- Dashboard Style Summary Cards -->
     <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
       <div class="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex flex-col justify-between">
-        <span class="text-sm font-semibold text-slate-500 uppercase tracking-wider">${escapeHtml(m.label)} Overview</span>
+        <span class="text-sm font-semibold text-slate-500 uppercase tracking-wider">${m.label} Overview</span>
         <span class="text-2xl font-bold text-slate-800 mt-2">${rows.length} Active Item${rows.length===1?'':'s'}</span>
       </div>
       <div class="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex flex-col justify-between">
@@ -591,7 +579,7 @@ function renderViewBase(){
     <!-- Data Table -->
     <div class="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
       <div class="p-4 border-b border-slate-100 bg-slate-50/50 flex items-center justify-between">
-        <h3 class="font-bold text-slate-700 text-sm tracking-wide uppercase">${escapeHtml(m.label)}</h3>
+        <h3 class="font-bold text-slate-700 text-sm tracking-wide uppercase">${m.label}</h3>
       </div>
       <div class="overflow-x-auto">
         <table class="w-full text-sm">
@@ -710,7 +698,8 @@ function stockRowByKey(k){
 async function readWhRow(w){
   const { data, error } = await sb.from('company_state').select('value,updated_at').eq('company_id',currentCompanyId()).eq('key','inventory_'+w).maybeSingle();
   if(error) throw new Error('Could not read warehouse "'+w+'" from the cloud ('+error.message+'). Nothing was changed.');
-  if(!data) return { exists:false, items:[], updated_at:null };
+  if(!data){ whVer[w]={ exists:false, updated_at:null }; return { exists:false, items:[], updated_at:null }; }
+  whVer[w]={ exists:true, updated_at:data.updated_at };
   let v=data.value;
   if(v==null) return { exists:true, items:[], updated_at:data.updated_at };
   if(typeof v==='string'){ try{ v=JSON.parse(v); }catch(e){ throw new Error('Warehouse "'+w+'" data could not be read. Nothing was changed.'); } }
@@ -741,8 +730,15 @@ async function mutateWh(w, fn){
   throw new Error('Another device keeps changing "'+w+'". Please try again in a moment.');
 }
 function findStockIdx(items,row){
+  if(row.id!=null){ const ii=items.findIndex(x=>x && x.id!=null && String(x.id)===String(row.id)); if(ii>=0) return ii; }
   const sk=normK(row.sku);
-  if(sk){ return items.findIndex(x=>x && normK(x.sku)===sk); }
+  if(sk){
+    const both=[]; items.forEach((x,i)=>{ if(x && normK(x.sku)===sk && normK(x.name)===normK(row.name)) both.push(i); });
+    if(both.length===1) return both[0];
+    if(both.length>1) return -1;
+    const only=[]; items.forEach((x,i)=>{ if(x && normK(x.sku)===sk) only.push(i); });
+    return only.length===1 ? only[0] : -1;
+  }
   const nm=normK(row.name);
   const same=[]; items.forEach((x,i)=>{ if(x && !normK(x.sku) && normK(x.name)===nm) same.push(i); });
   if(same.length===1) return same[0];
@@ -946,7 +942,7 @@ const fld=(l,h)=>`<div><label class="block text-xs font-semibold text-slate-500 
 const selWh=(id,fn)=>`<select id="${id}" class="${_inp}" ${fn?`onchange="${fn}"`:''}><option value="">Select warehouse</option>${whNames().map(w=>`<option>${escapeHtml(w)}</option>`).join('')}</select>`;
 function itemOpts(wh){
   const rows=(store.stock||[]).filter(r=>!wh||r.warehouse===wh);
-  return '<option value="">Select item</option>'+rows.map(r=>`<option value="${escapeHtml(r.sku||r.name)}">${escapeHtml(r.name)}${r.sku?' ('+escapeHtml(r.sku)+')':''}</option>`).join('');
+  return '<option value="">Select item</option>'+rows.map(r=>`<option value="${escapeHtml(r.id||r.sku||r.name)}">${escapeHtml(r.name)}${r.sku?' ('+escapeHtml(r.sku)+')':''}</option>`).join('');
 }
 function refreshItems(whId,itemId){ document.getElementById(itemId).innerHTML=itemOpts(document.getElementById(whId).value); }
 function opFormHTML(id){
@@ -968,7 +964,19 @@ async function loadWh(w){
   try{ return (await readWhRow(w)).items; }
   catch(e){ alert(e.message||String(e)); throw e; }
 }
-const findIt=(items,k)=>items.find(x=>x.sku===k||x.name===k);
+const findIt=(items,k)=>{
+  const byId=items.find(x=>x&&x.id!=null&&String(x.id)===String(k)); if(byId) return byId;
+  const bs=items.filter(x=>x&&x.sku===k); if(bs.length===1) return bs[0]; if(bs.length>1) return undefined;
+  const bn=items.filter(x=>x&&x.name===k); return bn.length===1?bn[0]:undefined;
+};
+/* same product in another warehouse: id, else same SKU + same name, else name when there is no SKU */
+const findLike=(items,it)=>{
+  if(!it) return undefined;
+  if(it.id!=null){ const a=items.find(x=>x&&x.id!=null&&String(x.id)===String(it.id)); if(a) return a; }
+  const sk=normK(it.sku), nm=normK(it.name);
+  const m=items.filter(x=>x&&normK(x.sku)===sk&&normK(x.name)===nm);
+  return m.length===1?m[0]:undefined;
+};
 async function logRow(modId,rec,unshift){
   const m=MODULES.find(x=>x.id===modId); store[modId]=store[modId]||[];
   unshift?store[modId].unshift(rec):store[modId].push(rec);
@@ -980,9 +988,10 @@ async function doTransfer(){
   if(from===to) return alert('From and To warehouses cannot be the same.');
   const src=await loadWh(from), it=findIt(src,k);
   if(!it||it.qty<q) return alert('Insufficient quantity in source warehouse.');
-  it.qty-=q; const dst=await loadWh(to), t=findIt(dst,k);
+  it.qty-=q; const dst=await loadWh(to), t=findLike(dst,it);
   t?t.qty+=q:dst.push({...it,qty:q});
-  if(!(await pushStockFor(from,src))||!(await pushStockFor(to,dst))) return;
+  if(!(await pushStockFor(from,src))) return;
+  if(!(await pushStockFor(to,dst))){ alert('Stock was taken out of "'+from+'" but could not be added to "'+to+'". Please add '+q+' back to "'+to+'" with a stock adjustment.'); return; }
   await logRow('movement',{item:it.name,from,to,quantity:q,date:d});
   await pullStock(); renderView(); alert('Stock transferred successfully.');
 }
@@ -1034,7 +1043,7 @@ async function doBundle(){
 }
 function baRows(){
   const w=document.getElementById('baWh').value, rows=(store.stock||[]).filter(r=>r.warehouse===w);
-  document.getElementById('baBody').innerHTML=rows.map((r,i)=>`<tr class="border-t border-slate-100" data-key="${escapeHtml(r.sku||r.name)}"><td class="py-2">${escapeHtml(r.name)}</td><td>${escapeHtml(r.sku||'')}</td><td>${r.qty}</td><td><input type="number" class="baAdj w-28 border border-slate-200 rounded px-2 py-1"></td><td><input class="baWhy w-full border border-slate-200 rounded px-2 py-1"></td></tr>`).join('')||'<tr><td colspan="5" class="py-4 text-slate-400">No products in this warehouse.</td></tr>';
+  document.getElementById('baBody').innerHTML=rows.map((r,i)=>`<tr class="border-t border-slate-100" data-key="${escapeHtml(r.id||r.sku||r.name)}"><td class="py-2">${escapeHtml(r.name)}</td><td>${escapeHtml(r.sku||'')}</td><td>${r.qty}</td><td><input type="number" class="baAdj w-28 border border-slate-200 rounded px-2 py-1"></td><td><input class="baWhy w-full border border-slate-200 rounded px-2 py-1"></td></tr>`).join('')||'<tr><td colspan="5" class="py-4 text-slate-400">No products in this warehouse.</td></tr>';
 }
 async function doBulkAdj(draft){
   const w=document.getElementById('baWh').value; if(!w) return alert('Select a warehouse');
